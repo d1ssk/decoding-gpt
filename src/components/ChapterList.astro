@@ -1,0 +1,104 @@
+---
+import { nanoGptChapters } from '../data/curriculum';
+import { localizedPath } from '../lib/site';
+import type { Language } from '../lib/site';
+import { useTranslations } from '../lib/i18n';
+
+interface Props {
+  lang: Language;
+  compact?: boolean;
+}
+
+const { lang, compact = false } = Astro.props;
+const t = useTranslations(lang);
+---
+
+<ol class:list={['chapter-list', { 'chapter-list--compact': compact }]}>
+  {nanoGptChapters.map((chapter) => (
+    <li class:list={{ 'is-future': !chapter.published }}>
+      <span class="chapter-number">
+        {String(chapter.order).padStart(2, '0')}
+      </span>
+      {chapter.published ? (
+        <a href={localizedPath(lang, `nanogpt/${chapter.slug}/`)}>
+          {chapter.title[lang]}
+        </a>
+      ) : (
+        <span class="chapter-title">{chapter.title[lang]}</span>
+      )}
+      <span class="chapter-status">
+        {chapter.published ? t.startHere : t.planned}
+      </span>
+    </li>
+  ))}
+</ol>
+
+<style>
+  .chapter-list {
+    border-top: 1px solid var(--line-strong);
+    list-style: none;
+    margin: 2.25rem 0 0;
+    padding: 0;
+  }
+
+  li {
+    align-items: baseline;
+    border-bottom: 1px solid var(--line);
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: 2.5rem minmax(0, 1fr) auto;
+    padding: 0.82rem 0;
+  }
+
+  .chapter-number {
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+  }
+
+  a,
+  .chapter-title {
+    color: var(--ink);
+    font-family: var(--font-display);
+    font-size: 1rem;
+    font-weight: 580;
+  }
+
+  a {
+    text-decoration-color: var(--line-strong);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.22em;
+  }
+
+  a:hover {
+    color: var(--accent);
+  }
+
+  .chapter-status {
+    color: var(--ink-muted);
+    font-family: var(--font-mono);
+    font-size: 0.64rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .is-future .chapter-number,
+  .is-future .chapter-title {
+    color: var(--ink-muted);
+  }
+
+  .chapter-list--compact li {
+    padding: 0.65rem 0;
+  }
+
+  @media (max-width: 36rem) {
+    li {
+      gap: 0.65rem;
+      grid-template-columns: 2rem minmax(0, 1fr);
+    }
+
+    .chapter-status {
+      grid-column: 2;
+    }
+  }
+</style>

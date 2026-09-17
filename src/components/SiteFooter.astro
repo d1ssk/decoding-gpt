@@ -1,0 +1,37 @@
+<footer class="site-footer">
+  <div>
+    <p class="site-footer__mark">GPTを読み解く / Decoding GPT</p>
+  </div>
+</footer>
+
+<style>
+  .site-footer {
+    border-top: 1px solid var(--line);
+    color: var(--ink-muted);
+    font-size: 0.8rem;
+    margin-top: 6rem;
+  }
+
+  .site-footer > div {
+    display: flex;
+    justify-content: flex-end;
+    margin: 0 auto;
+    max-width: var(--page-width);
+    padding: 2rem var(--page-gutter) 3rem;
+  }
+
+  .site-footer p {
+    margin: 0;
+  }
+
+  .site-footer__mark {
+    font-family: var(--font-mono);
+  }
+
+  @media (max-width: 42rem) {
+    .site-footer > div {
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+  }
+</style>

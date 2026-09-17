@@ -1,0 +1,104 @@
+---
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import ChapterList from '../../../components/ChapterList.astro';
+import { languages, localizedPath } from '../../../lib/site';
+import type { Language } from '../../../lib/site';
+import { useTranslations } from '../../../lib/i18n';
+
+export function getStaticPaths() {
+  return languages.map((lang) => ({ params: { lang } }));
+}
+
+const lang = Astro.params.lang as Language;
+const otherLang: Language = lang === 'ja' ? 'en' : 'ja';
+const t = useTranslations(lang);
+const title = `${t.nanoGptTitleStart}${t.nanoGptTitleEnd}`;
+---
+
+<BaseLayout
+  {lang}
+  {title}
+  description={t.nanoGptLead}
+  canonicalPath={`${lang}/nanogpt/`}
+  alternateHref={localizedPath(otherLang, 'nanogpt/')}
+>
+  <div class="section-page">
+    <header>
+      <p class="eyebrow">Part 01 / nanoGPT</p>
+      <h1>
+        <span>{t.nanoGptTitleStart}</span>
+        <span>{t.nanoGptTitleEnd}</span>
+      </h1>
+      <p class="lead">{t.nanoGptLead}</p>
+      <a class="start-link" href={localizedPath(lang, 'nanogpt/00-overview/')}>
+        {t.readOverview} <span aria-hidden="true">→</span>
+      </a>
+    </header>
+    <section id="chapters" aria-label={t.learningSections}>
+      <ChapterList {lang} />
+    </section>
+  </div>
+</BaseLayout>
+
+<style>
+  .section-page {
+    margin: 0 auto;
+    max-width: var(--page-width);
+    padding: 0 var(--page-gutter);
+  }
+
+  header {
+    padding: clamp(4rem, 12vw, 9rem) 0 clamp(4rem, 9vw, 7rem);
+  }
+
+  .eyebrow {
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  h1 {
+    display: flex;
+    flex-wrap: wrap;
+    font-family: var(--font-display);
+    font-size: clamp(2.5rem, 7vw, 5.5rem);
+    font-weight: 500;
+    letter-spacing: -0.055em;
+    line-height: 1.15;
+    margin: 1rem 0 1.5rem;
+  }
+
+  h1 span {
+    white-space: nowrap;
+  }
+
+  h1:lang(ja) {
+    font-family:
+      'Hiragino Sans', 'Noto Sans JP', 'Yu Gothic', 'Hiragino Kaku Gothic ProN',
+      Meiryo, sans-serif;
+  }
+
+  h1:lang(en) {
+    column-gap: 0.2em;
+  }
+
+  .lead {
+    color: var(--ink-secondary);
+    font-size: 1.1rem;
+    line-height: 1.8;
+    max-width: 40rem;
+  }
+
+  .start-link {
+    color: var(--ink);
+    display: inline-block;
+    font-weight: 650;
+    margin-top: 1.2rem;
+  }
+
+  .start-link:hover {
+    color: var(--accent);
+  }
+</style>

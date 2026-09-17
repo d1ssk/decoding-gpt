@@ -1,0 +1,63 @@
+---
+import SiteFooter from '../components/SiteFooter.astro';
+import SiteHeader from '../components/SiteHeader.astro';
+import { sitePath } from '../lib/site';
+import type { Language } from '../lib/site';
+import '../styles/global.css';
+
+interface Props {
+  lang: Language;
+  title: string;
+  description: string;
+  canonicalPath: string;
+  alternateHref: string;
+  hideChrome?: boolean;
+}
+
+const {
+  lang,
+  title,
+  description,
+  canonicalPath,
+  alternateHref,
+  hideChrome = false,
+} = Astro.props;
+const canonicalUrl = new URL(sitePath(canonicalPath), Astro.site);
+const alternateUrl = new URL(alternateHref, Astro.site);
+const fullTitle =
+  title === 'GPTを読み解く' || title === 'Decoding GPT'
+    ? title
+    : `${title} | ${lang === 'ja' ? 'GPTを読み解く' : 'Decoding GPT'}`;
+---
+
+<!doctype html>
+<html lang={lang}>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="generator" content={Astro.generator} />
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#f7f6f2" />
+    <link rel="icon" type="image/svg+xml" href={sitePath('favicon.svg')} />
+    <link rel="canonical" href={canonicalUrl} />
+    <link
+      rel="alternate"
+      hreflang={lang === 'ja' ? 'en' : 'ja'}
+      href={alternateUrl}
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="GPTを読み解く / Decoding GPT" />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonicalUrl} />
+    <meta property="og:locale" content={lang === 'ja' ? 'ja_JP' : 'en_US'} />
+    <title>{fullTitle}</title>
+  </head>
+  <body>
+    {!hideChrome && <SiteHeader {lang} {alternateHref} />}
+    <main id="main-content">
+      <slot />
+    </main>
+    {!hideChrome && <SiteFooter />}
+  </body>
+</html>

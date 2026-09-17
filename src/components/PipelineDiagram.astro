@@ -1,0 +1,138 @@
+---
+interface PipelineStep {
+  label: string;
+  detail?: string;
+}
+
+interface Props {
+  steps: PipelineStep[];
+  caption: string;
+  note: string;
+}
+
+const { steps, caption, note } = Astro.props;
+---
+
+<figure class="pipeline">
+  <div class="pipeline__eyebrow">{caption}</div>
+  <ol aria-label={caption}>
+    {steps.map((step, index) => (
+      <li>
+        <span class="pipeline__index">
+          {String(index + 1).padStart(2, '0')}
+        </span>
+        <strong>{step.label}</strong>
+        {step.detail && <small>{step.detail}</small>}
+      </li>
+    ))}
+  </ol>
+  <figcaption>{note}</figcaption>
+</figure>
+
+<style>
+  .pipeline {
+    background: var(--paper-subtle);
+    border: 1px solid var(--line-strong);
+    margin: 2.5rem 0;
+    padding: clamp(1.1rem, 3vw, 2rem);
+  }
+
+  .pipeline__eyebrow {
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.12em;
+    margin-bottom: 1.25rem;
+    text-transform: uppercase;
+  }
+
+  ol {
+    display: grid;
+    gap: 1.35rem;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  li {
+    min-width: 0;
+    position: relative;
+  }
+
+  li:not(:last-child)::after {
+    color: var(--accent);
+    content: '→';
+    font-size: 1rem;
+    position: absolute;
+    right: -0.95rem;
+    top: 1.7rem;
+  }
+
+  .pipeline__index {
+    border-top: 2px solid var(--accent);
+    color: var(--ink-muted);
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    margin-bottom: 0.75rem;
+    padding-top: 0.45rem;
+  }
+
+  strong,
+  small {
+    display: block;
+  }
+
+  strong {
+    color: var(--ink);
+    font-family: var(--font-display);
+    font-size: clamp(0.76rem, 1.4vw, 0.95rem);
+    line-height: 1.35;
+  }
+
+  small {
+    color: var(--ink-muted);
+    font-size: 0.68rem;
+    line-height: 1.45;
+    margin-top: 0.35rem;
+  }
+
+  figcaption {
+    border-top: 1px solid var(--line);
+    color: var(--ink-muted);
+    font-size: 0.74rem;
+    margin-top: 1.5rem;
+    padding-top: 0.85rem;
+  }
+
+  @media (max-width: 48rem) {
+    ol {
+      grid-template-columns: 1fr;
+      gap: 0;
+    }
+
+    li {
+      border-left: 2px solid var(--accent);
+      padding: 0.15rem 0 1.35rem 1rem;
+    }
+
+    li:not(:last-child)::after {
+      bottom: 0.15rem;
+      content: '↓';
+      left: -0.4rem;
+      right: auto;
+      top: auto;
+    }
+
+    .pipeline__index {
+      border: 0;
+      margin: 0 0 0.25rem;
+      padding: 0;
+    }
+
+    strong {
+      font-size: 0.95rem;
+    }
+  }
+</style>

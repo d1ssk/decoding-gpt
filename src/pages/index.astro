@@ -1,0 +1,133 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { localizedPath } from '../lib/site';
+---
+
+<BaseLayout
+  lang="en"
+  title="Decoding GPT"
+  description="Understanding nanoGPT / nanochat through code, experiments, and visualization"
+  canonicalPath=""
+  alternateHref={localizedPath('ja')}
+  hideChrome
+>
+  <section class="language-landing" aria-labelledby="site-title">
+    <div class="language-landing__mark" aria-hidden="true">
+      DG / 00
+    </div>
+    <div>
+      <p class="eyebrow">GPT-style language models, inspected</p>
+      <h1 id="site-title">
+        <span lang="ja">GPTを読み解く</span>
+        <br />
+        Decoding GPT
+      </h1>
+      <p class="lead">
+        <span lang="ja">
+          nanoGPT / nanochat をコード・実験・可視化から理解する
+        </span>
+        <br />
+        Understanding nanoGPT / nanochat through code, experiments, and
+        visualization
+      </p>
+    </div>
+    <nav aria-label="Choose a language / 言語を選択">
+      <a href={localizedPath('ja')} lang="ja">
+        <span>日本語</span>
+        <small>Japanese</small>
+      </a>
+      <a href={localizedPath('en')} lang="en">
+        <span>English</span>
+        <small>English</small>
+      </a>
+    </nav>
+  </section>
+</BaseLayout>
+
+<style>
+  .language-landing {
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    margin: 0 auto;
+    max-width: var(--page-width);
+    min-height: 100vh;
+    padding: clamp(2rem, 7vw, 5rem) var(--page-gutter);
+  }
+
+  .language-landing__mark,
+  .eyebrow {
+    color: var(--ink-muted);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .language-landing > div:nth-child(2) {
+    align-self: center;
+    padding: 4rem 0;
+  }
+
+  .eyebrow {
+    color: var(--accent);
+    margin: 0 0 1.2rem;
+  }
+
+  h1 {
+    font-family: var(--font-display);
+    font-size: clamp(3.2rem, 10vw, 8.5rem);
+    font-weight: 500;
+    letter-spacing: -0.055em;
+    line-height: 0.94;
+    margin: 0;
+  }
+
+  h1 span {
+    font-size: 0.65em;
+    letter-spacing: -0.04em;
+  }
+
+  .lead {
+    color: var(--ink-secondary);
+    font-size: clamp(0.88rem, 2vw, 1.05rem);
+    line-height: 1.8;
+    margin: 2rem 0 0;
+  }
+
+  nav {
+    border-top: 1px solid var(--line-strong);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  nav a {
+    color: var(--ink);
+    display: flex;
+    flex-direction: column;
+    padding: 1.2rem 0;
+    text-decoration: none;
+  }
+
+  nav a + a {
+    border-left: 1px solid var(--line);
+    padding-left: 1.5rem;
+  }
+
+  nav a:hover span {
+    color: var(--accent);
+  }
+
+  nav span {
+    font-family: var(--font-display);
+    font-size: 1.35rem;
+    font-weight: 600;
+  }
+
+  nav small {
+    color: var(--ink-muted);
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    margin-top: 0.3rem;
+    text-transform: uppercase;
+  }
+</style>

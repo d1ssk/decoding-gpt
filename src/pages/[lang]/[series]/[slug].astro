@@ -1,0 +1,66 @@
+---
+import { getCollection, render } from 'astro:content';
+import ArticleLayout from '../../../layouts/ArticleLayout.astro';
+import { localizedPath } from '../../../lib/site';
+import type { Language } from '../../../lib/site';
+
+export async function getStaticPaths() {
+  const articles = await getCollection('articles', ({ data }) => !data.draft);
+
+  return articles.map((article) => ({
+    params: {
+      lang: article.data.lang,
+      series: article.data.series,
+      slug: article.data.slug,
+    },
+    props: { article },
+  }));
+}
+
+const { article } = Astro.props;
+const { Content, headings } = await render(article);
+const allArticles = await getCollection(
+  'articles',
+  ({ data }) => !data.draft && data.series === article.data.series,
+);
+const siblings = allArticles
+  .filter(({ data }) => data.lang === article.data.lang)
+  .sort((a, b) => a.data.order - b.data.order);
+const currentIndex = siblings.findIndex(({ id }) => id === article.id);
+const previousArticle = siblings[currentIndex - 1];
+const nextArticle = siblings[currentIndex + 1];
+const translation = allArticles.find(
+  ({ data }) =>
+    data.translationKey === article.data.translationKey &&
+    data.lang !== article.data.lang,
+);
+const otherLang: Language = article.data.lang === 'ja' ? 'en' : 'ja';
+const alternateHref = translation
+  ? localizedPath(
+      otherLang,
+      `${translation.data.series}/${translation.data.slug}/`,
+    )
+  : localizedPath(otherLang, `${article.data.series}/`);
+const previous = previousArticle
+  ? {
+      title: previousArticle.data.title,
+      href: localizedPath(
+        article.data.lang,
+        `${previousArticle.data.series}/${previousArticle.data.slug}/`,
+      ),
+    }
+  : undefined;
+const next = nextArticle
+  ? {
+      title: nextArticle.data.title,
+      href: localizedPath(
+        article.data.lang,
+        `${nextArticle.data.series}/${nextArticle.data.slug}/`,
+      ),
+    }
+  : undefined;
+---
+
+<ArticleLayout {article} {headings} {alternateHref} {previous} {next}>
+  <Content />
+</ArticleLayout>

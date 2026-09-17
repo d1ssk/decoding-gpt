@@ -1,0 +1,197 @@
+@import 'katex/dist/katex.min.css';
+
+:root {
+  --paper: #f7f6f2;
+  --paper-subtle: #efeee9;
+  --ink: #171817;
+  --ink-secondary: #454943;
+  --ink-muted: #747970;
+  --line: #dcdcd5;
+  --line-strong: #bfc1b9;
+  --accent: #1e5b49;
+  --accent-light: #dce8e2;
+  --page-width: 76rem;
+  --page-gutter: clamp(1.15rem, 4vw, 3rem);
+  --font-body:
+    system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans JP',
+    'Hiragino Kaku Gothic ProN', Meiryo, sans-serif;
+  --font-display: var(--font-body);
+  --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  color-scheme: light;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  scroll-behavior: smooth;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  min-width: 18rem;
+}
+
+main {
+  min-height: calc(100vh - 15rem);
+}
+
+a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+::selection {
+  background: var(--accent-light);
+}
+
+.skip-link {
+  background: var(--ink);
+  color: var(--paper);
+  left: 1rem;
+  padding: 0.65rem 0.9rem;
+  position: fixed;
+  top: 1rem;
+  transform: translateY(-200%);
+  z-index: 100;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+.article-prose {
+  font-size: 1rem;
+  line-height: 1.85;
+  min-width: 0;
+}
+
+.article-prose > :first-child {
+  margin-top: 0;
+}
+
+.article-prose h2,
+.article-prose h3 {
+  font-family: var(--font-display);
+  scroll-margin-top: 2rem;
+}
+
+.article-prose h2 {
+  border-top: 1px solid var(--line-strong);
+  font-size: clamp(1.65rem, 4vw, 2.35rem);
+  font-weight: 560;
+  letter-spacing: -0.025em;
+  line-height: 1.25;
+  margin: 4.5rem 0 1.3rem;
+  padding-top: 1.15rem;
+}
+
+.article-prose h3 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  margin: 2.8rem 0 0.9rem;
+}
+
+.article-prose p,
+.article-prose ul,
+.article-prose ol {
+  margin-bottom: 1.35rem;
+  margin-top: 1.35rem;
+}
+
+.article-prose a {
+  color: var(--accent);
+}
+
+.article-prose :not(pre) > code,
+.source-metadata code {
+  background: var(--paper-subtle);
+  border: 1px solid var(--line);
+  border-radius: 0.15rem;
+  font-family: var(--font-mono);
+  font-size: 0.84em;
+  padding: 0.08em 0.28em;
+}
+
+.article-prose pre {
+  border: 1px solid var(--line-strong);
+  font-size: 0.8rem;
+  line-height: 1.65;
+  margin: 2rem 0;
+  overflow-x: auto;
+  padding: 1.1rem 1.25rem;
+}
+
+.article-prose pre code {
+  font-family: var(--font-mono);
+}
+
+.article-prose table {
+  border-collapse: collapse;
+  font-size: 0.86rem;
+  margin: 2rem 0;
+  width: 100%;
+}
+
+.article-prose th,
+.article-prose td {
+  border-bottom: 1px solid var(--line);
+  padding: 0.7rem 0.8rem;
+  text-align: left;
+}
+
+.article-prose th {
+  border-bottom-color: var(--line-strong);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+}
+
+.article-prose blockquote,
+.article-prose .callout {
+  background: var(--paper-subtle);
+  border-left: 3px solid var(--accent);
+  margin: 2rem 0;
+  padding: 0.8rem 1.2rem;
+}
+
+.article-prose blockquote p,
+.article-prose .callout p {
+  margin: 0.55rem 0;
+}
+
+.article-prose figure img,
+.article-prose figure svg {
+  height: auto;
+  max-width: 100%;
+}
+
+.article-prose figcaption {
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+}
+
+.article-prose .katex-display {
+  margin: 1.8rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.4rem 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}

@@ -1,0 +1,107 @@
+---
+import LanguageSwitcher from './LanguageSwitcher.astro';
+import { useTranslations } from '../lib/i18n';
+import { localizedPath } from '../lib/site';
+import type { Language } from '../lib/site';
+
+interface Props {
+  lang: Language;
+  alternateHref: string;
+}
+
+const { lang, alternateHref } = Astro.props;
+const t = useTranslations(lang);
+---
+
+<a class="skip-link" href="#main-content">
+  {t.skipToContent}
+</a>
+<header class="site-header">
+  <div class="site-header__inner">
+    <a
+      class="wordmark"
+      href={localizedPath(lang)}
+      aria-label={`${t.siteTitle} — ${t.home}`}
+    >
+      <span>{t.siteTitle}</span>
+      <small>Decoding GPT</small>
+    </a>
+    <nav class="primary-nav" aria-label={t.navigation}>
+      <a href={localizedPath(lang, 'nanogpt/')}>nanoGPT</a>
+      <a href={localizedPath(lang, 'nanochat/')}>nanochat</a>
+    </nav>
+    <LanguageSwitcher {lang} {alternateHref} />
+  </div>
+</header>
+
+<style>
+  .site-header {
+    border-bottom: 1px solid var(--line);
+  }
+
+  .site-header__inner {
+    align-items: center;
+    display: grid;
+    gap: 2rem;
+    grid-template-columns: 1fr auto auto;
+    margin: 0 auto;
+    max-width: var(--page-width);
+    min-height: 4.6rem;
+    padding: 0 var(--page-gutter);
+  }
+
+  .wordmark {
+    color: var(--ink);
+    display: flex;
+    flex-direction: column;
+    line-height: 1.1;
+    text-decoration: none;
+    width: fit-content;
+  }
+
+  .wordmark span {
+    font-family: var(--font-display);
+    font-size: 1.02rem;
+    font-weight: 650;
+    letter-spacing: 0.01em;
+  }
+
+  .wordmark small {
+    color: var(--ink-muted);
+    font-size: 0.61rem;
+    letter-spacing: 0.12em;
+    margin-top: 0.25rem;
+    text-transform: uppercase;
+  }
+
+  .primary-nav {
+    display: flex;
+    gap: 1.5rem;
+  }
+
+  .primary-nav a {
+    color: var(--ink-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    text-decoration: none;
+  }
+
+  .primary-nav a:hover {
+    color: var(--accent);
+  }
+
+  @media (max-width: 42rem) {
+    .site-header__inner {
+      gap: 0.9rem 1rem;
+      grid-template-columns: 1fr auto;
+      padding-bottom: 0.85rem;
+      padding-top: 0.85rem;
+    }
+
+    .primary-nav {
+      gap: 1rem;
+      grid-column: 1 / -1;
+      grid-row: 2;
+    }
+  }
+</style>

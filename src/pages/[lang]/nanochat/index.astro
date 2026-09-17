@@ -1,0 +1,181 @@
+---
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { languages, localizedPath } from '../../../lib/site';
+import type { Language } from '../../../lib/site';
+import { useTranslations } from '../../../lib/i18n';
+
+export function getStaticPaths() {
+  return languages.map((lang) => ({ params: { lang } }));
+}
+
+const lang = Astro.params.lang as Language;
+const otherLang: Language = lang === 'ja' ? 'en' : 'ja';
+const t = useTranslations(lang);
+---
+
+<BaseLayout
+  {lang}
+  title="nanochat"
+  description={t.nanoChatLead}
+  canonicalPath={`${lang}/nanochat/`}
+  alternateHref={localizedPath(otherLang, 'nanochat/')}
+>
+  <div class="nanochat-page">
+    <p class="eyebrow">Part 02 / {t.planned}</p>
+    <h1>nanochat</h1>
+    <section id="overview" class="statement" aria-labelledby="overview-title">
+      <h2 id="overview-title">{t.nanoChatOverviewTitle}</h2>
+      <p>{t.nanoChatOverviewBody}</p>
+    </section>
+    <section id="chapters" class="chapters" aria-labelledby="chapters-title">
+      <h2 id="chapters-title">{t.chapters}</h2>
+      <p>{t.nanoChatChaptersLead}</p>
+      <ol>
+        <li>
+          <span class="chapter-number">00</span>
+          <a href="#overview">{t.overview}</a>
+          <span class="chapter-status">{t.startHere}</span>
+        </li>
+        {t.nanoChatPlannedSections.map((title, index) => (
+          <li class="is-future">
+            <span class="chapter-number">
+              {String(index + 1).padStart(2, '0')}
+            </span>
+            <span>{title}</span>
+            <span class="chapter-status">{t.planned}</span>
+          </li>
+        ))}
+      </ol>
+    </section>
+    <p class="status">{t.nanoChatStatus}</p>
+    <a href={localizedPath(lang, 'nanogpt/00-overview/')}>← {t.readOverview}</a>
+  </div>
+</BaseLayout>
+
+<style>
+  .nanochat-page {
+    margin: 0 auto;
+    max-width: var(--page-width);
+    padding: clamp(5rem, 13vw, 10rem) var(--page-gutter) 2rem;
+  }
+
+  .eyebrow,
+  .status {
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  h1 {
+    font-family: var(--font-display);
+    font-size: clamp(4rem, 14vw, 11rem);
+    font-weight: 500;
+    letter-spacing: -0.065em;
+    line-height: 0.9;
+    margin: 1.2rem 0 clamp(4rem, 10vw, 8rem);
+  }
+
+  .statement {
+    border-bottom: 1px solid var(--line-strong);
+    border-top: 1px solid var(--line-strong);
+    display: grid;
+    gap: 3rem;
+    grid-template-columns: 1fr 2fr;
+    padding: 2rem 0;
+  }
+
+  h2 {
+    font-family: var(--font-display);
+    font-size: clamp(1.7rem, 4vw, 2.7rem);
+    font-weight: 550;
+    margin: 0;
+  }
+
+  .statement p {
+    color: var(--ink-secondary);
+    line-height: 1.8;
+    margin: 0;
+    max-width: 40rem;
+  }
+
+  .statement,
+  .chapters {
+    scroll-margin-top: 2rem;
+  }
+
+  .chapters {
+    margin-top: 4rem;
+  }
+
+  .chapters > p {
+    color: var(--ink-secondary);
+    line-height: 1.8;
+  }
+
+  .chapters ol {
+    border-top: 1px solid var(--line-strong);
+    list-style: none;
+    margin: 2rem 0;
+    padding: 0;
+  }
+
+  .chapters li {
+    align-items: baseline;
+    border-bottom: 1px solid var(--line);
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: 2.5rem minmax(0, 1fr) auto;
+    padding: 0.82rem 0;
+  }
+
+  .chapters a {
+    font-size: 1rem;
+    margin: 0;
+  }
+
+  .chapter-number,
+  .chapter-status {
+    color: var(--ink-muted);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+  }
+
+  .is-future {
+    color: var(--ink-muted);
+  }
+
+  .status {
+    color: var(--ink-muted);
+    margin-top: 2rem;
+  }
+
+  a {
+    color: var(--ink);
+    display: inline-block;
+    font-size: 0.85rem;
+    font-weight: 650;
+    margin-top: 1rem;
+  }
+
+  a:hover {
+    color: var(--accent);
+  }
+
+  @media (max-width: 40rem) {
+    .statement {
+      gap: 1rem;
+      grid-template-columns: 1fr;
+    }
+
+    .chapters li {
+      grid-template-columns: 2rem minmax(0, 1fr);
+      gap: 0.65rem;
+    }
+
+    .chapter-status {
+      grid-column: 2;
+    }
+  }
+</style>

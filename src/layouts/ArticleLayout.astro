@@ -1,0 +1,335 @@
+---
+import type { CollectionEntry } from 'astro:content';
+import type { MarkdownHeading } from 'astro';
+import BaseLayout from './BaseLayout.astro';
+import { localizedPath } from '../lib/site';
+import type { Language } from '../lib/site';
+import { useTranslations } from '../lib/i18n';
+
+interface NavItem {
+  title: string;
+  href: string;
+}
+
+interface Props {
+  article: CollectionEntry<'articles'>;
+  headings: MarkdownHeading[];
+  alternateHref: string;
+  previous?: NavItem;
+  next?: NavItem;
+}
+
+const { article, headings, alternateHref, previous, next } = Astro.props;
+const { data } = article;
+const lang = data.lang as Language;
+const t = useTranslations(lang);
+const tableOfContents = headings.filter((heading) => heading.depth === 2);
+const articleNumber = String(data.order).padStart(2, '0');
+---
+
+<BaseLayout
+  {lang}
+  title={data.title}
+  description={data.description}
+  canonicalPath={`${lang}/${data.series}/${data.slug}/`}
+  {alternateHref}
+>
+  <div class="article-shell">
+    <header class="article-header">
+      <nav class="breadcrumbs" aria-label={t.breadcrumbs}>
+        <a href={localizedPath(lang)}>{t.home}</a>
+        <span aria-hidden="true">/</span>
+        <a href={localizedPath(lang, `${data.series}/`)}>{data.series}</a>
+      </nav>
+      <p class="article-number">{articleNumber}</p>
+      <h1>{data.title}</h1>
+    </header>
+
+    <div class="article-grid">
+      <article class="article-prose">
+        <slot />
+      </article>
+
+      {tableOfContents.length >= 3 && (
+        <aside class="toc">
+          <h2>{t.onThisPage}</h2>
+          <ol>
+            {tableOfContents.map((heading) => (
+              <li>
+                <a href={`#${heading.slug}`}>{heading.text}</a>
+              </li>
+            ))}
+          </ol>
+        </aside>
+      )}
+    </div>
+
+    <section class="source-metadata" aria-labelledby="source-metadata-heading">
+      <h2 id="source-metadata-heading">{t.sourceMetadata}</h2>
+      <dl>
+        <div>
+          <dt>{t.series}</dt>
+          <dd>{data.series}</dd>
+        </div>
+        {data.upstream?.repository && (
+          <div>
+            <dt>{t.repository}</dt>
+            <dd>{data.upstream.repository}</dd>
+          </div>
+        )}
+        {data.upstream?.commit && (
+          <div>
+            <dt>{t.commit}</dt>
+            <dd>
+              <code>{data.upstream.commit}</code>
+            </dd>
+          </div>
+        )}
+        {data.upstream?.sourceFiles && (
+          <div>
+            <dt>{t.sourceFiles}</dt>
+            <dd>{data.upstream.sourceFiles.join(', ')}</dd>
+          </div>
+        )}
+        {data.experimentId && (
+          <div>
+            <dt>{t.experimentId}</dt>
+            <dd>
+              <code>{data.experimentId}</code>
+            </dd>
+          </div>
+        )}
+      </dl>
+      {!data.upstream && <p>{t.sourcePending}</p>}
+    </section>
+
+    <nav class="article-navigation" aria-label={t.articleNavigation}>
+      <div>
+        <span>{t.previous}</span>
+        {previous ? (
+          <a href={previous.href}>{previous.title}</a>
+        ) : (
+          <small>{t.noPrevious}</small>
+        )}
+      </div>
+      <div class="article-navigation__next">
+        <span>{t.next}</span>
+        {next ? (
+          <a href={next.href}>{next.title}</a>
+        ) : (
+          <small>{t.noNext}</small>
+        )}
+      </div>
+    </nav>
+  </div>
+</BaseLayout>
+
+<style>
+  .article-shell {
+    margin: 0 auto;
+    max-width: var(--page-width);
+    padding: 0 var(--page-gutter);
+  }
+
+  .article-header {
+    border-bottom: 1px solid var(--line-strong);
+    max-width: 51rem;
+    padding: clamp(3.5rem, 9vw, 7.5rem) 0 3rem;
+  }
+
+  .breadcrumbs {
+    align-items: center;
+    color: var(--ink-muted);
+    display: flex;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    gap: 0.65rem;
+    margin-bottom: 3.2rem;
+  }
+
+  .breadcrumbs a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .breadcrumbs a:hover {
+    color: var(--accent);
+  }
+
+  .article-number {
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    letter-spacing: 0.08em;
+    margin: 0 0 0.75rem;
+  }
+
+  h1 {
+    font-family: var(--font-display);
+    font-size: clamp(2.5rem, 7vw, 5rem);
+    font-weight: 540;
+    letter-spacing: -0.04em;
+    line-height: 1.02;
+    margin: 0;
+  }
+
+  .article-grid {
+    display: grid;
+    gap: clamp(3rem, 8vw, 7rem);
+    grid-template-columns: minmax(0, 44rem) minmax(9rem, 13rem);
+    margin-top: 4rem;
+  }
+
+  .toc {
+    align-self: start;
+    border-top: 1px solid var(--line-strong);
+    position: sticky;
+    top: 2rem;
+  }
+
+  .toc h2 {
+    color: var(--ink-muted);
+    font-family: var(--font-mono);
+    font-size: 0.67rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    margin: 0;
+    padding: 0.9rem 0;
+    text-transform: uppercase;
+  }
+
+  .toc ol {
+    border-top: 1px solid var(--line);
+    list-style: decimal-leading-zero;
+    margin: 0;
+    padding: 0.55rem 0 0 1.8rem;
+  }
+
+  .toc li {
+    color: var(--ink-muted);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    line-height: 1.45;
+    padding: 0.35rem 0 0.35rem 0.2rem;
+  }
+
+  .toc a {
+    color: var(--ink-secondary);
+    text-decoration: none;
+  }
+
+  .toc a:hover {
+    color: var(--accent);
+  }
+
+  .source-metadata {
+    border-top: 1px solid var(--line-strong);
+    margin-top: 5rem;
+    max-width: 44rem;
+    padding-top: 1.25rem;
+  }
+
+  .source-metadata h2 {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    margin: 0 0 1.25rem;
+    text-transform: uppercase;
+  }
+
+  .source-metadata dl {
+    margin: 0;
+  }
+
+  .source-metadata dl div {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: 8rem minmax(0, 1fr);
+    padding: 0.35rem 0;
+  }
+
+  .source-metadata dt,
+  .source-metadata dd,
+  .source-metadata p {
+    font-size: 0.78rem;
+    margin: 0;
+  }
+
+  .source-metadata dt,
+  .source-metadata p {
+    color: var(--ink-muted);
+  }
+
+  .source-metadata p {
+    margin-top: 0.9rem;
+  }
+
+  .article-navigation {
+    border-bottom: 1px solid var(--line-strong);
+    border-top: 1px solid var(--line-strong);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    margin-top: 4rem;
+  }
+
+  .article-navigation > div {
+    display: flex;
+    flex-direction: column;
+    min-height: 5rem;
+    padding: 1.3rem 0;
+  }
+
+  .article-navigation > div + div {
+    border-left: 1px solid var(--line);
+    padding-left: 1.5rem;
+  }
+
+  .article-navigation__next {
+    align-items: flex-end;
+    text-align: right;
+  }
+
+  .article-navigation span {
+    color: var(--ink-muted);
+    font-family: var(--font-mono);
+    font-size: 0.64rem;
+    letter-spacing: 0.08em;
+    margin-bottom: 0.55rem;
+    text-transform: uppercase;
+  }
+
+  .article-navigation a {
+    color: var(--ink);
+    font-family: var(--font-display);
+    font-weight: 600;
+  }
+
+  .article-navigation small {
+    color: var(--ink-muted);
+    font-size: 0.75rem;
+  }
+
+  @media (max-width: 52rem) {
+    .article-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .toc {
+      grid-row: 1;
+      position: static;
+    }
+  }
+
+  @media (max-width: 36rem) {
+    .article-navigation {
+      grid-template-columns: 1fr;
+    }
+
+    .article-navigation > div + div {
+      border-left: 0;
+      border-top: 1px solid var(--line);
+      padding-left: 0;
+    }
+  }
+</style>

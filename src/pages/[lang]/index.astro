@@ -1,0 +1,248 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { languages, localizedPath } from '../../lib/site';
+import type { Language } from '../../lib/site';
+import { useTranslations } from '../../lib/i18n';
+
+export function getStaticPaths() {
+  return languages.map((lang) => ({ params: { lang } }));
+}
+
+const lang = Astro.params.lang as Language;
+const otherLang: Language = lang === 'ja' ? 'en' : 'ja';
+const t = useTranslations(lang);
+---
+
+<BaseLayout
+  {lang}
+  title={t.siteTitle}
+  description={t.siteSubtitle}
+  canonicalPath={`${lang}/`}
+  alternateHref={localizedPath(otherLang)}
+>
+  <section class="home-hero">
+    <h1>{t.siteTitle}</h1>
+    <p>{t.siteSubtitle}</p>
+  </section>
+
+  <div class="home-introduction">
+    <div class="home-introduction-text">
+      <p>{t.homeIntroduction}</p>
+      <p>
+        {t.homeVideoBefore}
+        <a href="https://www.youtube.com/playlist?list=PLZHQObOWTQDNU6R1_67000Dx_ZCJB-3pi">
+          {t.homeVideoLink}
+        </a>
+        {t.homeVideoAfter}
+      </p>
+      <p>
+        {t.homeRepositoriesBefore}
+        <a href="https://github.com/karpathy/nanoGPT">nanoGPT</a>
+        {t.homeNanoGptAfter}
+        <a href="https://github.com/karpathy/nanochat">nanochat</a>
+        {t.homeNanoChatAfter}
+      </p>
+      <p>{t.homeReadingPlan}</p>
+    </div>
+  </div>
+
+  <section class="paths" aria-label={t.learningSections}>
+    <article>
+      <div class="path-number">01</div>
+      <div>
+        <p class="path-status">{t.startHere}</p>
+        <h2>
+          <a href={localizedPath(lang, 'nanogpt/#chapters')}>nanoGPT</a>
+        </h2>
+        <div class="path-links">
+          <a href={localizedPath(lang, 'nanogpt/00-overview/')}>
+            {t.readOverview} <span aria-hidden="true">→</span>
+          </a>
+          <a href={localizedPath(lang, 'nanogpt/#chapters')}>
+            {t.viewSection} <span aria-hidden="true">→</span>
+          </a>
+        </div>
+        <p class="path-description">{t.nanoGptLead}</p>
+      </div>
+    </article>
+    <article>
+      <div class="path-number">02</div>
+      <div>
+        <p class="path-status">{t.nanoChatStatus}</p>
+        <h2>
+          <a href={localizedPath(lang, 'nanochat/#chapters')}>nanochat</a>
+        </h2>
+        <div class="path-links">
+          <a href={localizedPath(lang, 'nanochat/#overview')}>
+            {t.readOverview} <span aria-hidden="true">→</span>
+          </a>
+          <a href={localizedPath(lang, 'nanochat/#chapters')}>
+            {t.viewSection} <span aria-hidden="true">→</span>
+          </a>
+        </div>
+        <p class="path-description">{t.nanoChatLead}</p>
+      </div>
+    </article>
+  </section>
+</BaseLayout>
+
+<style>
+  .home-hero,
+  .home-introduction,
+  .paths {
+    margin-left: auto;
+    margin-right: auto;
+    max-width: var(--page-width);
+    padding-left: var(--page-gutter);
+    padding-right: var(--page-gutter);
+  }
+
+  .home-hero {
+    padding-bottom: clamp(2.5rem, 5vw, 4rem);
+    padding-top: clamp(5rem, 13vw, 10rem);
+  }
+
+  .path-status,
+  .path-number {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .path-status {
+    color: var(--accent);
+  }
+
+  .home-hero h1 {
+    font-family: var(--font-display);
+    font-size: clamp(3.6rem, 11vw, 8.4rem);
+    font-weight: 500;
+    letter-spacing: -0.06em;
+    line-height: 0.95;
+    margin: 1rem 0 1.5rem;
+  }
+
+  /* Keep Latin and Japanese glyphs in the same family in the large title. */
+  .home-hero h1:lang(ja) {
+    font-family:
+      'Hiragino Sans', 'Noto Sans JP', 'Yu Gothic', 'Hiragino Kaku Gothic ProN',
+      Meiryo, sans-serif;
+  }
+
+  .home-hero > p:last-child {
+    color: var(--ink-secondary);
+    font-size: clamp(1.125rem, 2.5vw, 1.5rem);
+    line-height: 1.75;
+    margin: 0;
+    max-width: 44rem;
+  }
+
+  .paths {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .home-introduction {
+    padding-bottom: clamp(2rem, 5vw, 4rem);
+  }
+
+  .home-introduction-text {
+    font-size: 1rem;
+    line-height: 1.9;
+  }
+
+  .home-introduction p {
+    margin: 0 0 0.9em;
+  }
+
+  .home-introduction p:last-child {
+    margin-bottom: 0;
+  }
+
+  .paths article {
+    display: grid;
+    gap: 1.5rem;
+    grid-template-columns: 2.5rem 1fr;
+    min-height: 25rem;
+    padding: clamp(2rem, 5vw, 4rem) 0;
+  }
+
+  .paths article + article {
+    border-left: 1px solid var(--line);
+    padding-left: clamp(1.5rem, 4vw, 3.5rem);
+  }
+
+  .path-number {
+    color: var(--ink-muted);
+    padding-top: 0.2rem;
+  }
+
+  .path-status {
+    margin: 0 0 2.5rem;
+  }
+
+  .paths h2 {
+    font-family: var(--font-display);
+    font-size: clamp(2.2rem, 6vw, 4rem);
+    font-weight: 520;
+    letter-spacing: -0.04em;
+    margin: 0;
+  }
+
+  .path-description {
+    color: var(--ink-secondary);
+    line-height: 1.75;
+    margin: 1.1rem 0 2rem;
+    max-width: 25rem;
+  }
+
+  .paths a {
+    color: var(--ink);
+  }
+
+  .paths h2 a {
+    text-decoration: none;
+  }
+
+  .paths h2 a:hover {
+    text-decoration: underline;
+  }
+
+  .path-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem 1.5rem;
+    margin-top: 0.9rem;
+  }
+
+  .path-links a {
+    font-size: 0.85rem;
+    font-weight: 650;
+  }
+
+  .paths a:hover {
+    color: var(--accent);
+  }
+
+  @media (max-width: 44rem) {
+    .home-hero h1 {
+      font-size: clamp(2.5rem, 10vw, 4rem);
+      line-height: 1.1;
+    }
+
+    .paths {
+      grid-template-columns: 1fr;
+    }
+
+    .paths article {
+      min-height: auto;
+    }
+
+    .paths article + article {
+      border-left: 0;
+      border-top: 1px solid var(--line);
+      padding-left: 0;
+    }
+  }
+</style>

@@ -141,3 +141,13 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Local upstream source snapshots (reference only; never deployed)
+public/data/nanoGPT-master/
+public/data/nanochat-master/
+
+# Astro
+.astro/
+
+# Local exploration workspace
+lab/
