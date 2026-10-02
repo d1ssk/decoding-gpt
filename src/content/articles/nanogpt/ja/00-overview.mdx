@@ -73,30 +73,30 @@ nanoGPT/
 
 主要なファイルは、それぞれ次の役割を持ちます。
 
-| 場所                                                                                                                                 | 役割                                                 | このシリーズで注目するもの                          |
-| ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | -------------------------------------- |
-| [`data/*/prepare.py`](https://github.com/karpathy/nanoGPT/tree/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data)                      | textの取得、train/validation分割、tokenize、binary保存       | token ID、語彙、datasetの境界                 |
-| [`model.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py)                           | Transformerの全module、forward、optimizer構築、generation | shape、attention、residual stream、logits |
-| [`train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py)                           | batch作成、model初期化、評価、backpropagation、checkpoint     | input/target、loss、gradient、更新順序        |
-| [`sample.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/sample.py)                         | modelとtokenizerを復元し、promptからsampleする               | temperature、top-k、encode/decode        |
-| [`configurator.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/configurator.py) と `config/` | 実験条件をdefaultから上書きする                                | model size、data、learning rate、runtime  |
-| [`bench.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/bench.py)                           | 訓練の中心部分を切り出して速度を測る                                 | iteration time、MFU、bottleneck          |
+| 場所                                                                                                                                | 役割                                                      | このシリーズで注目するもの                |
+| ----------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ----------------------------------------- |
+| [`data/*/prepare.py`](https://github.com/karpathy/nanoGPT/tree/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data)                       | textの取得、train/validation分割、tokenize、binary保存    | token ID、語彙、datasetの境界             |
+| [`model.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py)                            | Transformerの全module、forward、optimizer構築、generation | shape、attention、residual stream、logits |
+| [`train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py)                            | batch作成、model初期化、評価、backpropagation、checkpoint | input/target、loss、gradient、更新順序    |
+| [`sample.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/sample.py)                          | modelとtokenizerを復元し、promptからsampleする            | temperature、top-k、encode/decode         |
+| [`configurator.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/configurator.py) と `config/` | 実験条件をdefaultから上書きする                           | model size、data、learning rate、runtime  |
+| [`bench.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/bench.py)                            | 訓練の中心部分を切り出して速度を測る                      | iteration time、MFU、bottleneck           |
 
 `model.py`だけを読んでも、GPTがどのように訓練されるのかは分かりません。一方、`train.py`だけを読んでも、`model(X, Y)`の中で何が起きているのかは分かりません。nanoGPTを理解するには、**データの値を追う視点**と**ファイル間の制御の流れを追う視点**を行き来する必要があります。
 
 ## textから生成までの一本の流れ
 
 <PipelineDiagram
-caption="Conceptual flow / nanoGPT end to end"
-note="概念図です。実際のtrainingでは評価、gradient accumulation、mixed precision、DDP、checkpointなどの処理が周囲に加わります。"
-steps={[
-{ label: 'データ準備', detail: 'text → token ID' },
-{ label: 'token列', detail: 'train.bin / val.bin' },
-{ label: 'batch', detail: '入力x / 正解y' },
-{ label: 'GPT forward', detail: 'hidden state → logits' },
-{ label: 'loss / 更新', detail: 'backward → AdamW' },
-{ label: '保存 / 生成', detail: 'checkpoint → sample' },
-]}
+  caption="Conceptual flow / nanoGPT end to end"
+  note="概念図です。実際のtrainingでは評価、gradient accumulation、mixed precision、DDP、checkpointなどの処理が周囲に加わります。"
+  steps={[
+    { label: 'データ準備', detail: 'text → token ID' },
+    { label: 'token列', detail: 'train.bin / val.bin' },
+    { label: 'batch', detail: '入力x / 正解y' },
+    { label: 'GPT forward', detail: 'hidden state → logits' },
+    { label: 'loss / 更新', detail: 'backward → AdamW' },
+    { label: '保存 / 生成', detail: 'checkpoint → sample' },
+  ]}
 />
 
 ### 1. データをtoken IDへ変える
@@ -107,9 +107,9 @@ modelは文字列を直接受け取りません。`prepare.py`でtextをtokenize
 
 処理後に作られる中心的なartifactは、次の3つです。
 
-* `train.bin`: parameter更新に使うtoken列
-* `val.bin`: 学習には使わず、lossを見積もるためのtoken列
-* `meta.pkl`: 文字単位datasetの語彙sizeとencode/decode情報
+- `train.bin`: parameter更新に使うtoken列
+- `val.bin`: 学習には使わず、lossを見積もるためのtoken列
+- `meta.pkl`: 文字単位datasetの語彙sizeとencode/decode情報
 
 binary fileの中身は「文書の表」ではなく、連結された長いtoken streamです。訓練時には、このstreamの一部を切り出して文脈窓を作ります。
 
@@ -174,15 +174,15 @@ GPT
 
 ここで$C$はembedding dimensionです。model内の中心的なshapeは、次のように変化していきます。
 
-| 段階                  | shape                            | 値の意味                   |
-| ------------------- | -------------------------------- | ---------------------- |
-| token ID            | $B \times T$                     | 語彙表へのindex             |
+| 段階                | shape                            | 値の意味                       |
+| ------------------- | -------------------------------- | ------------------------------ |
+| token ID            | $B \times T$                     | 語彙表へのindex                |
 | token embedding     | $B \times T \times C$            | tokenごとの学習可能なvector    |
-| position embedding  | $T \times C$                     | sequence内の位置を表すvector  |
-| query / key / value | $B \times H \times T \times C/H$ | attention headごとの表現    |
-| attention weight    | $B \times H \times T \times T$   | 各位置から過去の各位置への重み        |
-| residual stream     | $B \times T \times C$            | block間を流れるhidden state |
-| logits              | $B \times T \times V$            | 次token候補のscore         |
+| position embedding  | $T \times C$                     | sequence内の位置を表すvector   |
+| query / key / value | $B \times H \times T \times C/H$ | attention headごとの表現       |
+| attention weight    | $B \times H \times T \times T$   | 各位置から過去の各位置への重み |
+| residual stream     | $B \times T \times C$            | block間を流れるhidden state    |
+| logits              | $B \times T \times V$            | 次token候補のscore             |
 
 ### causal self-attention
 
@@ -220,11 +220,11 @@ attentionがtoken位置どうしの情報を混ぜるのに対し、[`MLP`](http
 
 modelの初期化には3つの入口があります。
 
-| `init_from` | 開始状態                              | 用途                   |
-| ----------- | --------------------------------- | -------------------- |
-| `scratch`   | randomに初期化したweight                | pretrainingを最初から行う   |
-| `resume`    | `out_dir/ckpt.pt`のmodelとoptimizer | 中断した訓練を続ける           |
-| `gpt2*`     | Hugging Faceから読み込んだGPT-2 weight   | 評価またはfine-tuningを始める |
+| `init_from` | 開始状態                               | 用途                          |
+| ----------- | -------------------------------------- | ----------------------------- |
+| `scratch`   | randomに初期化したweight               | pretrainingを最初から行う     |
+| `resume`    | `out_dir/ckpt.pt`のmodelとoptimizer    | 中断した訓練を続ける          |
+| `gpt2*`     | Hugging Faceから読み込んだGPT-2 weight | 評価またはfine-tuningを始める |
 
 この3つの経路は開始時のweightこそ異なりますが、最終的には同じ`GPT` instanceと同じtraining loopへ合流します。
 
@@ -234,7 +234,7 @@ nanoGPTでは、architectureと訓練条件を`train.py`のdefaultから、`conf
 
 たとえば、upstreamのdefaultと文字単位Shakespeareのconfigでは、規模が大きく異なります。
 
-| 設定                  | `train.py` default | Shakespeare character config |
+| 設定                | `train.py` default | Shakespeare character config |
 | ------------------- | -----------------: | ---------------------------: |
 | context length      |               1024 |                          256 |
 | Transformer blocks  |                 12 |                            6 |
@@ -248,13 +248,13 @@ model sizeだけでなく、batch size、learning rate、iteration数、dropout�
 
 学習と生成は、token IDからhidden stateとlogitsを得るところまで同じmodelを共有します。違うのは、得られたlogitsをどのように使うかです。
 
-|            | 学習                 | 生成                        |
-| ---------- | ------------------ | ------------------------- |
+|                | 学習                  | 生成                                 |
+| -------------- | --------------------- | ------------------------------------ |
 | modelへの入力  | token ID `X`と正解`Y` | promptと、それまでに生成したtoken ID |
-| 必要なlogits  | 全$B \times T$位置    | 最後の1位置                    |
-| logitsの使い方 | cross entropyを計算   | softmaxして次tokenを選ぶ        |
-| parameter  | gradientで更新する      | 固定する                      |
-| 繰り返し単位     | batch              | 生成する1 token               |
+| 必要なlogits   | 全$B \times T$位置    | 最後の1位置                          |
+| logitsの使い方 | cross entropyを計算   | softmaxして次tokenを選ぶ             |
+| parameter      | gradientで更新する    | 固定する                             |
+| 繰り返し単位   | batch                 | 生成する1 token                      |
 
 この対応を押さえておくと、`train.py`と`sample.py`が別々のmodelを使っているのではなく、同じ`GPT.forward()`を異なる目的で呼び出していることが分かります。
 
