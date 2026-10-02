@@ -37,3 +37,18 @@ The site is statically built with Astro and deployed by `.github/workflows/deplo
 ## Source references
 
 Upstream source references used in articles should be tied to specific commits where appropriate.
+
+## Sitemaps
+
+The existing `@astrojs/sitemap` integration generates `dist/sitemap-index.xml`
+and `dist/sitemap-0.xml` during `npm run build`. Published URLs include the
+`/decoding-gpt/` base path and trailing slashes. The language landing page,
+Japanese and English home/series pages, and non-draft articles are included.
+Draft articles have no generated route and are not included. New published
+article routes are picked up automatically; do not edit generated XML.
+
+Search Console uses the host-wide `https://d1ssk.github.io/` URL-prefix property.
+Its root `sitemap-index.xml` references `/decoding-gpt/sitemap-0.xml` directly,
+not this project's index, to avoid nesting indexes. If the output grows into
+multiple `sitemap-N.xml` files, add all of them to the host index. There is no
+need to submit this project's sitemap separately.
