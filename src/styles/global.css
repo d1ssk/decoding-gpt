@@ -162,6 +162,36 @@ button:focus-visible {
   letter-spacing: 0.04em;
 }
 
+.article-prose .model-parameters-table {
+  overflow-x: auto;
+}
+
+.article-prose .model-parameters-table :is(th, td):first-child {
+  width: 10rem;
+  min-width: 8rem;
+  max-width: 10rem;
+}
+
+.article-prose .model-parameters-table :is(th, td):nth-child(n + 3) {
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
+
+.article-prose .model-parameters-notes {
+  margin: 1rem 0 2rem;
+}
+
+.article-prose .model-parameters-notes summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.article-prose .model-parameters-table:focus-visible,
+.article-prose .model-parameters-notes summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 @media (min-width: 40rem) {
   .article-prose .data-files-table :is(th, td):first-child {
     min-width: 8rem;

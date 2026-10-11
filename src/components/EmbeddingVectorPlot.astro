@@ -1,0 +1,223 @@
+---
+import { defaultView, vectorColors, vectorScene } from '../lib/embedding-plot';
+import { embeddingUi } from '../lib/embedding-i18n';
+import type { Language } from '../lib/site';
+
+interface Props {
+  lang: Language;
+  token: number[];
+  position: number[];
+  extent: number;
+}
+const { lang, token, position, extent } = Astro.props;
+const t = embeddingUi[lang];
+const prefix = `embedding-plot-${lang}`;
+const scene = vectorScene(token, position, extent, defaultView, 0);
+---
+
+<section
+  class="vector-plot"
+  data-vector-plot
+  data-token={JSON.stringify(token)}
+  data-position={JSON.stringify(position)}
+  data-extent={extent}
+  aria-labelledby={`${prefix}-title`}
+>
+  <h3 id={`${prefix}-title`}>{t.plotTitle}</h3>
+  <div class="legend">
+    <span style={{ color: vectorColors.token }}>
+      <b>e</b> {t.tokenRow}
+    </span>
+    <span aria-hidden="true">+</span>
+    <span style={{ color: vectorColors.position }}>
+      <b>p</b> {t.positionRow}
+    </span>
+    <span aria-hidden="true">=</span>
+    <span style={{ color: vectorColors.sum }}>
+      <b>e + p</b> {t.sumRow}
+    </span>
+  </div>
+  <svg
+    viewBox="0 0 640 440"
+    role="img"
+    tabindex="0"
+    aria-labelledby={`${prefix}-title`}
+    aria-describedby={`${prefix}-hint ${prefix}-description`}
+  >
+    <defs>
+      {Object.entries(vectorColors).map(([key, color]) => (
+        <marker
+          id={`${prefix}-${key}`}
+          viewBox="0 0 10 10"
+          refX="9"
+          refY="5"
+          markerWidth="8"
+          markerHeight="8"
+          markerUnits="userSpaceOnUse"
+          orient="auto-start-reverse"
+        >
+          <path d="M 0 0 L 10 5 L 0 10 z" fill={color} />
+        </marker>
+      ))}
+    </defs>
+    <g data-plot-lines fill="none">
+      {scene.lines.map((line) => (
+        <path
+          data-line={line.key}
+          d={line.d}
+          stroke={line.color}
+          stroke-width={line.width}
+          stroke-dasharray={line.dashed ? '5 5' : undefined}
+          marker-end={line.arrow ? `url(#${prefix}-${line.arrow})` : undefined}
+          opacity={line.opacity}
+        />
+      ))}
+    </g>
+    <g data-plot-labels>
+      {scene.labels.map((label) => (
+        <text x={label.x} y={label.y} fill={label.color}>
+          {label.text}
+        </text>
+      ))}
+    </g>
+  </svg>
+  <div class="plot-controls">
+    <label class="translation">
+      <input
+        data-shift
+        type="checkbox"
+        aria-describedby={`${prefix}-shift-hint`}
+        disabled
+      />
+      {t.shift}
+    </label>
+    <label>
+      {t.zoom}: <output data-zoom-value>1.0×</output>
+      <input
+        data-zoom
+        type="range"
+        min="0.7"
+        max="1.8"
+        step="0.1"
+        value="1"
+        disabled
+      />
+    </label>
+    <button data-view-reset type="button" disabled>
+      {t.viewReset}
+    </button>
+  </div>
+  <details>
+    <summary>{t.plotDetails}</summary>
+    <p id={`${prefix}-shift-hint`}>{t.shiftHint}</p>
+    <p id={`${prefix}-description`}>{t.plotDescription}</p>
+    <p id={`${prefix}-hint`}>{t.plotHint}</p>
+  </details>
+</section>
+
+<style>
+  .vector-plot {
+    border-block: 1px solid var(--line);
+    padding: 1rem 0;
+    margin: 1.5rem 0;
+  }
+  .vector-plot h3 {
+    margin: 0 0 0.5rem;
+    font-size: 1rem;
+  }
+  .vector-plot p {
+    font-size: 0.8rem;
+    margin: 0.6rem 0;
+  }
+  summary {
+    cursor: pointer;
+    font-size: 0.8rem;
+    padding: 0.75rem 0;
+  }
+  summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.6rem;
+    font-size: 0.85rem;
+  }
+  .legend b {
+    font-family: var(--font-mono);
+  }
+  svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    touch-action: none;
+    cursor: grab;
+    background: var(--paper);
+  }
+  svg:active {
+    cursor: grabbing;
+  }
+  svg text {
+    font: 14px var(--font-mono);
+    paint-order: stroke;
+    stroke: var(--paper);
+    stroke-width: 3px;
+    stroke-linejoin: round;
+  }
+  svg:focus-visible,
+  input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+  .plot-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 1rem;
+  }
+  label {
+    display: block;
+    font-size: 0.8rem;
+  }
+  .translation {
+    flex: 1 1 18rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 2.75rem;
+    cursor: pointer;
+  }
+  input {
+    display: block;
+    width: 100%;
+    min-height: 1.75rem;
+    accent-color: var(--accent);
+  }
+  input[type='checkbox'] {
+    width: 1rem;
+    height: 1rem;
+    min-height: 0;
+    flex-shrink: 0;
+  }
+  button {
+    font: inherit;
+    font-size: 0.8rem;
+    background: var(--paper);
+    color: var(--ink);
+    border: 1px solid var(--line-strong);
+    border-radius: 0.15rem;
+    padding: 0.4rem 0.6rem;
+    cursor: pointer;
+  }
+  button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  @media (max-width: 480px) {
+    svg {
+      min-height: 280px;
+    }
+  }
+</style>

@@ -1,0 +1,327 @@
+---
+title: 'Token and Position Embeddings'
+description: 'Distinguish learned embedding weights from the arrays retrieved for an input, and build model input representations from token IDs and positions.'
+order: 3
+series: nanogpt
+lang: en
+translationKey: nanogpt-03-embeddings-and-position
+slug: 03-embeddings-and-position
+draft: false
+upstream:
+  repository: karpathy/nanoGPT
+  commit: 3adf61e154c3fe3fca428ad6bc3818b27a3b8291
+  sourceFiles:
+    - model.py
+experimentId: nanogpt-03-embeddings
+---
+
+import EmbeddingInspector from '../../../../components/EmbeddingInspector.astro';
+
+## What is an embedding?
+
+The input `X` created in the previous chapter is an array that represents each token with an integer called a **token ID**. An ID serves to distinguish one token from another. For example, although IDs `3` and `4` are numerically close, their tokens may differ in meaning and usage.
+
+GPT therefore associates each token ID with a vector of `C` numbers, called a **token embedding**. The vector's components are stored as model weights and updated during training. Through these updates, the model develops representations useful for predicting the next token.
+
+To represent where a token appears in the input sequence, the model also provides a separate vector called a **position embedding**. Its values are updated during training as well. nanoGPT adds the token and position embeddings to represent each position with a `C`-dimensional vector.
+
+At this stage, the vector is determined by the token at that position and its position index. Information from preceding tokens is incorporated in the subsequent Transformer blocks.
+
+## Embedding weights and `nn.Embedding`
+
+nanoGPT stores token and position embeddings in separate tables, with one vector per row.
+
+In [`GPT.__init__()` in `model.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L118-L140), PyTorch's `nn.Embedding` defines two embedding layers: one for tokens and one for positions. The relevant parts are shown below.
+
+```python
+self.transformer = nn.ModuleDict(dict(
+    wte = nn.Embedding(config.vocab_size, config.n_embd),
+    wpe = nn.Embedding(config.block_size, config.n_embd),
+    # Dropout, Transformer blocks, and LayerNorm omitted
+))
+```
+
+`nn` refers to PyTorch's `torch.nn`, which provides components for building neural networks. `nn.Embedding` is a PyTorch module that takes integer indices and retrieves the vectors in the corresponding rows. nanoGPT uses token IDs as indices for token embeddings and positions within the input sequence as indices for position embeddings.
+
+`nn.Embedding(A, C)` creates an object with weights arranged in `A` rows and `C` columns. Each row corresponds to one vector, and supplying index `i` retrieves the vector in row `i`. Row numbering starts at `0`.
+
+nanoGPT provides the following two embeddings:
+
+| Weights                           | Shape             | Row selection                      |
+| --------------------------------- | ----------------- | ---------------------------------- |
+| `wte.weight`: token embeddings    | `[V, C]`          | Token ID                           |
+| `wpe.weight`: position embeddings | `[block_size, C]` | Position within the input sequence |
+
+Here, `V` is the vocabulary size (`vocab_size`), `C` is the embedding dimension (`n_embd`), and `block_size` is the maximum input length the model supports.
+
+For example, with `V = 5`, `block_size = 8`, and `C = 3`, the token embedding table has shape `[5, 3]` and the position embedding table has shape `[8, 3]`. Each row in both tables contains three numbers.
+
+These numbers are stored as model weights in `wte.weight` and `wpe.weight` and updated during training. PyTorch manages these weights as `nn.Parameter` objects.
+
+The key operation is that **`nn.Embedding` takes an index and retrieves the vector in the corresponding row**. It uses the index to look up a stored vector rather than computing a vector from the numerical value of the index itself.
+
+Next, we will pass IDs to `nn.Embedding` and inspect how it retrieves rows.
+
+## Retrieve rows by token ID
+
+Let's examine how `nn.Embedding` works with concrete numbers.
+
+The following example creates an embedding with three rows and three columns and sets each row's values manually.
+
+```python
+import torch
+from torch import nn
+
+embedding = nn.Embedding(3, 3)
+
+with torch.no_grad():
+    embedding.weight.copy_(torch.tensor([
+        [1.0, 2.0, 3.0],
+        [4.0, 5.0, 6.0],
+        [7.0, 8.0, 9.0],
+    ]))
+
+ids = torch.tensor([[2, 0, 2]])
+vectors = embedding(ids)
+
+print(vectors.tolist())
+print(list(vectors.shape))
+print(torch.equal(vectors, embedding.weight[ids]))
+```
+
+The output is:
+
+```text
+[[[7.0, 8.0, 9.0], [1.0, 2.0, 3.0], [7.0, 8.0, 9.0]]]
+[1, 3, 3]
+True
+```
+
+`nn.Embedding(3, 3)` creates a module whose weights have shape `[3, 3]`. The weights are initially random, but here `copy_()` replaces their values to make the result easy to inspect. `torch.no_grad()` keeps this assignment out of the gradient computation record.
+
+`embedding(ids)` retrieves the rows corresponding to the input IDs. In this example, it returns `[7, 8, 9]` for ID `2`, `[1, 2, 3]` for ID `0`, and `[7, 8, 9]` again for ID `2`, in that order.
+
+Thus, **`embedding(ids)` corresponds to retrieving rows with `embedding.weight[ids]`**. The input `ids` has shape `[1, 3]`. Each ID is replaced by a vector of three components, so the output `vectors` has shape `[1, 3, 3]`.
+
+### How nanoGPT uses it
+
+In nanoGPT's `GPT.forward()`, the following code retrieves token embeddings:
+
+```python
+tok_emb = self.transformer.wte(idx)
+```
+
+`self.transformer.wte` is the `nn.Embedding` defined when the model was created. `idx` is the input token ID array, corresponding to the `X` created in the previous chapter.
+
+For example, using Chapter 1's vocabulary, `['\n', 'e', 'h', 'l', 'o']`, the IDs for `hello\n` are `[2, 1, 3, 3, 4, 0]`. Passing this sequence to `wte` retrieves rows `2, 1, 3, 3, 4, 0` of `wte.weight` in order.
+
+Each token ID is replaced by a vector of length `C`. If the input `idx` has shape `[B, T]`, `tok_emb` has shape `[B, T, C]`. Here, `B` is the batch size and `T` is the input sequence length.
+
+Both occurrences of `l` in `hello` have ID `3`, so they use the same token embedding. **The same token ID retrieves the same vector from shared weights, even across different input sequences and positions.**
+
+Roles such as part of speech or meaning are not assigned to individual vector components in advance. Training updates their values, and combinations of components come to represent features useful for prediction.
+
+## Retrieve position embeddings
+
+The same mechanism retrieves position embeddings for each position within the input sequence.
+
+nanoGPT's `GPT.forward()` uses the following code:
+
+```python
+device = idx.device
+b, t = idx.size()
+pos = torch.arange(0, t, dtype=torch.long, device=device)
+pos_emb = self.transformer.wpe(pos)
+```
+
+`idx.size()` returns the input shape. The variables `b` and `t` correspond to batch size `B` and input length `T`. `device` identifies the CPU or GPU on which the input `idx` resides.
+
+`torch.arange(0, t, ...)` creates an array of integers from `0` through `t - 1`. For example, with `T = 6`:
+
+```text
+pos = [0, 1, 2, 3, 4, 5]
+```
+
+The subsequent `self.transformer.wpe(pos)` retrieves the rows of `wpe.weight` corresponding to these position indices. In this example, it retrieves six vectors, from rows `0` through `5`.
+
+Here, **the full position embedding weights have shape `[block_size, C]`, while the retrieved `pos_emb` has shape `[T, C]`**.
+
+`block_size` is the maximum input length the model supports; the actual input length `T` can be shorter. For example, with `block_size = 8` and `T = 6`, the weights also contain vectors for positions `6` and `7`, which are unused for this input.
+
+Position indices **start at `0` at the beginning of the sequence passed to the model**. Wherever `get_batch()` slices from the original text, each input sequence starts at position `0`. Across all sequences in the batch, the same position index uses the same position embedding.
+
+This approach, which provides a learnable vector for each position within the input sequence, is called **learned absolute position embeddings**. nanoGPT uses this approach.
+
+## Add the two embeddings
+
+We have now retrieved token embeddings `tok_emb` of shape `[B, T, C]` and position embeddings `pos_emb` of shape `[T, C]` for the input `idx`. nanoGPT adds these two arrays component by component.
+
+[`GPT.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L170-L182) performs this computation with the following code:
+
+```python
+tok_emb = self.transformer.wte(idx)
+pos_emb = self.transformer.wpe(pos)
+x = self.transformer.drop(tok_emb + pos_emb)
+```
+
+`tok_emb + pos_emb` adds the embedding vector for each position to the token vector at that position.
+
+Writing $E$ for the values immediately after addition, each component is:
+
+$$
+E_{b,t,c}
+=
+W_{\mathrm{token}}[\mathrm{idx}_{b,t},c]
++
+W_{\mathrm{position}}[t,c]
+$$
+
+Here, $b$ indexes the input sequence within the batch, $t$ the position in that sequence, and $c$ the vector component.
+
+### Addition through broadcasting
+
+`tok_emb` has shape `[B, T, C]`, while `pos_emb` has shape `[T, C]`. PyTorch uses **broadcasting** to add these arrays despite their different numbers of dimensions.
+
+In this case, `pos_emb` is treated as an array of shape `[1, T, C]`, with the same values used across the batch dimension.
+
+For example, with `B = 2`, the computation is:
+
+```text
+tok_emb[0, :, :] + pos_emb[:, :] → E[0, :, :]
+tok_emb[1, :, :] + pos_emb[:, :] → E[1, :, :]
+```
+
+Every sequence in the batch receives the same position vector at position `0`, the same position vector at position `1`, and so on. The sum has shape `[B, T, C]`.
+
+The array shapes so far are:
+
+| Array                         | Shape       |
+| ----------------------------- | ----------- |
+| Input `idx`                   | `[B, T]`    |
+| Token embeddings `tok_emb`    | `[B, T, C]` |
+| Position embeddings `pos_emb` | `[T, C]`    |
+| Sum `tok_emb + pos_emb`       | `[B, T, C]` |
+
+### Through dropout to the Transformer block
+
+Finally, nanoGPT passes the sum to `self.transformer.drop(...)`.
+
+**Dropout** randomly sets some components to `0` during training to help reduce overfitting. It discourages the model from relying too heavily on particular components.
+
+If each component is set to `0` with probability $p$, the retained components are multiplied by $1 / (1 - p)$. For example, with `p = 0.2`, a value of `10` becomes `0` with 20% probability and `12.5` with 80% probability. Averaged over repeated applications, the value is `0 × 0.2 + 12.5 × 0.8 = 10`, matching the original value.
+
+During evaluation, dropout is disabled: values pass through unchanged, without being zeroed or scaled up.
+
+nanoGPT specifies the dropout probability with `dropout`. Its default is `0.0`, so values remain unchanged with that setting.
+
+The resulting `x` is passed to the first Transformer block.
+
+## Inspect embedding lookup and addition
+
+This visualization uses values from a **small, untrained model** created with the source repository's `model.py`: `V = 5`, `block_size = 8`, `C = 3`, and random seed `42`. The data was generated on CPU with PyTorch `2.8.0`. The two inputs are `hello\n` and `\nhello`, with `B = 2` and `T = 6` fixed.
+
+The 3D plot's axes `c0`, `c1`, and `c2` are this model's three embedding components. `e` denotes the token vector and `p` the position vector. Drag or swipe to rotate the view and inspect their directions and lengths.
+
+<EmbeddingInspector lang="en" />
+
+Try the following to inspect each set of weights:
+
+1. Select the two occurrences of `l` at positions `2` and `3` in `b = 0`. The token embedding row stays the same; the position embedding and sum change.
+2. Keep the position fixed and change the selected token. The position embedding stays the same, while the token embedding changes.
+3. Reset the input and select position `3` in `b = 0` and `b = 1`. Both contain `l`, so their token embeddings, position embeddings, and sums all match. The preceding characters differ.
+4. Toggle the position-vector checkbox. Compare both vectors starting at the origin with the head-to-tail addition path.
+
+These vectors were randomly initialized before training. Their distances and directions therefore do not represent character similarities acquired through learning. Use this visualization to focus on how the vectors corresponding to tokens and positions are retrieved and added.
+
+## Verify shapes and equalities in code
+
+Let's check these computations using the actual nanoGPT code.
+
+With PyTorch available, run the following code from the directory containing `model.py` at the pinned source commit. As in the interactive visualization, it creates a small model with `V = 5`, `block_size = 8`, and `C = 3`.
+
+```python
+import torch
+from model import GPT, GPTConfig
+
+torch.manual_seed(42)
+model = GPT(GPTConfig(
+    vocab_size=5, block_size=8, n_embd=3,
+    n_layer=1, n_head=1, dropout=0.0, bias=True,
+)).eval()
+
+idx = torch.tensor([[2, 1, 3, 3, 4, 0], [0, 2, 1, 3, 3, 4]])
+
+with torch.no_grad():
+    pos = torch.arange(idx.size(1))
+    tok_emb = model.transformer.wte(idx)
+    pos_emb = model.transformer.wpe(pos)
+    x = model.transformer.drop(tok_emb + pos_emb)
+
+print(list(model.transformer.wte.weight.shape))
+print(list(model.transformer.wpe.weight.shape))
+print(list(tok_emb.shape), list(pos_emb.shape), list(x.shape))
+print(torch.equal(tok_emb[0, 2], tok_emb[0, 3]))
+print(torch.equal(x[0, 3], x[1, 3]))
+```
+
+After the parameter count printed during model creation, the output is:
+
+```text
+[5, 3]
+[8, 3]
+[2, 6, 3] [6, 3] [2, 6, 3]
+True
+True
+```
+
+The first three lines show the shapes of the embedding weights and the retrieved arrays. With `B = 2`, `T = 6`, and `C = 3`, the sum `x` has shape `[2, 6, 3]`.
+
+The first `True` shows that the token embeddings for `l` at positions `2` and `3` in `hello\n` are equal. The second `True` shows that even across different input sequences, the same `l` at position `3` produces the same sum.
+
+`eval()` switches the model to evaluation mode, disabling dropout. `torch.no_grad()` skips recording operations for gradient computation, which this inspection does not need.
+
+Even with a fixed random seed, initialization can differ across PyTorch versions and execution environments.
+
+## How training changes the weights
+
+So far, we have used initialized embedding weights to retrieve vectors. How do these vectors change through training?
+
+nanoGPT initializes both token and position embedding weights from a normal distribution with mean `0` and standard deviation `0.02`. At this stage, the vectors have no linguistic meaning.
+
+During training, the model computes a loss from its next-token predictions and the targets, then updates its weights to reduce that loss. Embedding weights are updated along with the weights inside the Transformer blocks.
+
+For example, when the same `l` appears repeatedly in the input, gradients propagated back from those positions accumulate into the shared `wte.weight[3]`. Position embeddings likewise receive accumulated gradients from input sequences using the same position.
+
+Through repeated updates, token vectors develop structure useful for language prediction.
+
+### Semantic structure in the vector space
+
+In language models trained on sufficient data, regularities in word meaning and usage can emerge as relationships between vectors.
+
+A well-known example from word embeddings is a relationship such as:
+
+$$
+\boldsymbol{v}_{\mathrm{prince}}
+-
+\boldsymbol{v}_{\mathrm{man}}
++
+\boldsymbol{v}_{\mathrm{woman}}
+\approx
+\boldsymbol{v}_{\mathrm{princess}}
+$$
+
+This expresses the idea that the relationship between `prince` and `princess` can appear as a vector difference similar to the relationship between `man` and `woman`.
+
+In this way, vector spaces can represent both word similarities and semantic relationships through directions and distances. These relationships are not explicitly taught to the model. As it learns to predict from large amounts of text, regularities in language become reflected in the arrangement of vectors.
+
+Such vector arithmetic is particularly associated with word embeddings such as Word2Vec; it is not guaranteed to hold for GPT token embeddings. GPT may split a word into multiple tokens, and its subsequent Transformer blocks also develop representations that depend on context.
+
+This small character-level model cannot directly demonstrate these semantic relationships between words. The underlying idea is shared, however: **a token ID that began as an identifier becomes associated with a vector that reflects linguistic structure through learning**.
+
+nanoGPT also shares the token embedding weights `wte.weight` with the output's `lm_head.weight`. These weights therefore receive gradients through both input embedding lookups and output predictions. “From Hidden States to Probabilities” will cover this mechanism in detail.
+
+## In the next chapter
+
+This chapter examined how a sequence of integer token IDs becomes a sequence of vectors carrying token identity and position information. Adding token and position embeddings changes the input shape from `[B, T]` to `[B, T, C]`. At this stage, each position's vector is determined only by its token and position index.
+
+The next chapter follows this array into the first Transformer block. Through LayerNorm and self-attention, each position combines information from itself and preceding tokens to develop a representation that depends on context.

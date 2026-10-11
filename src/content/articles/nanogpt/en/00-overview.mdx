@@ -15,6 +15,8 @@ upstream:
     - train.py
     - sample.py
     - configurator.py
+    - config/train_shakespeare_char.py
+    - config/finetune_shakespeare.py
     - data/*/prepare.py
 experimentId: nanogpt-00-overview
 ---
@@ -243,22 +245,6 @@ There are three entry points for model initialization:
 
 These paths start with different weights but eventually join the same `GPT` instance and training loop.
 
-## Configuration defines the experiment
-
-nanoGPT starts from defaults in `train.py` and overrides architecture and training settings through `config/*.py` and `--key=value`. [`configurator.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/configurator.py#L20-L47) is small, but it is important for experiment reproducibility.
-
-The source repository’s defaults and the character-level Shakespeare configuration operate at very different scales:
-
-| Setting             | `train.py` default | Shakespeare character config |
-| ------------------- | -----------------: | ---------------------------: |
-| Context length      |               1024 |                          256 |
-| Transformer blocks  |                 12 |                            6 |
-| Attention heads     |                 12 |                            6 |
-| Embedding dimension |                768 |                          384 |
-| Dataset             |        OpenWebText |             Tiny Shakespeare |
-
-Model size, batch size, learning rate, iteration count, dropout, evaluation count, and device all affect the result and runtime. Record the configuration and source commit so the experiment can be reproduced.
-
 ## Where training and generation diverge
 
 Training and generation share the same model from token IDs through hidden states and logits. They differ in how those logits are used.
@@ -272,6 +258,63 @@ Training and generation share the same model from token IDs through hidden state
 | Unit of repetition | One batch                               | One generated token                      |
 
 `train.py` and `sample.py` call the same `GPT.forward()` for training and generation, respectively.
+
+## Configuration defines the experiment
+
+nanoGPT starts from defaults in `train.py` and overrides architecture and training settings through `config/*.py` and `--key=value`. [`configurator.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/configurator.py#L20-L47) is small, but it is important for experiment reproducibility.
+
+### Default model configurations and parameter counts
+
+The source repository provides OpenWebText defaults, a character-level Shakespeare configuration, and a Shakespeare configuration using GPT-2 BPE. The table shows the model produced by each configuration without additional overrides.
+
+- **OpenWebText**: the defaults in [`train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py) train a GPT-2-sized model from scratch.
+- **Shakespeare char**: [`config/train_shakespeare_char.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/config/train_shakespeare_char.py) trains a small model from scratch.
+- **Shakespeare BPE**: [`config/finetune_shakespeare.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/config/finetune_shakespeare.py) loads pretrained **GPT-2 XL** weights for fine-tuning.
+
+The table uses $V$ (vocabulary size), $C$ (embedding dimension), and $H$ (head count) from the preceding explanations, plus $L$ for the number of blocks and $T_{\max}$ for the maximum input token count (`block_size`). The actual input length satisfies $T \leq T_{\max}$. The bias indicator $\delta$ is 1 when bias is enabled and 0 otherwise. The lower rows count trainable parameter elements in each component.
+
+<div className="model-parameters-table" role="region" aria-label="Model configurations and parameter counts" tabIndex={0}>
+
+| Item                                       | Symbol / formula             |     OpenWebText | Shakespeare char |   Shakespeare BPE |
+| ------------------------------------------ | ---------------------------- | --------------: | ---------------: | ----------------: |
+| Tokenization                               | —                            |       GPT-2 BPE |  Character-level |         GPT-2 BPE |
+| Vocabulary size `vocab_size`               | $V$                          |          50,304 |               65 |            50,257 |
+| Maximum input length `block_size`          | $T_{\max}$                   |           1,024 |              256 |             1,024 |
+| Transformer blocks `n_layer`               | $L$                          |              12 |                6 |                48 |
+| Attention heads `n_head`                   | $H$                          |              12 |                6 |                25 |
+| Embedding dimension `n_embd`               | $C$                          |             768 |              384 |             1,600 |
+| Dimension per head                         | $d_{\text{head}} = C/H$      |              64 |               64 |                64 |
+| MLP intermediate dimension                 | $4C$                         |           3,072 |            1,536 |             6,400 |
+| Linear and LayerNorm `bias`                | $\delta$                     |     `False` (0) |      `False` (0) |        `True` (1) |
+| `dropout`                                  | —                            |             0.0 |              0.2 |               0.0 |
+| Token embedding (shared with output layer) | $VC$                         |      38,633,472 |           24,960 |        80,411,200 |
+| Position embedding                         | $T_{\max}C$                  |         786,432 |           98,304 |         1,638,400 |
+| Attention (all blocks)                     | $L(4C^2 + 4\delta C)$        |      28,311,552 |        3,538,944 |       491,827,200 |
+| MLP (all blocks)                           | $L(8C^2 + 5\delta C)$        |      56,623,104 |        7,077,888 |       983,424,000 |
+| LayerNorm (all blocks and final layer)     | $(2L+1)C(1+\delta)$          |          19,200 |            4,992 |           310,400 |
+| **Total parameters**                       | Sum of the five counts above | **124,373,760** |   **10,745,088** | **1,557,611,200** |
+| Approximate total (M = million)            | —                            |         124.37M |           10.75M |         1,557.61M |
+
+</div>
+
+<details className="model-parameters-notes">
+<summary>Table notes</summary>
+
+The attention count includes the query, key, and value projections ($3C^2$), the output projection ($C^2$), and their biases when enabled. MLP counts include the expansion and contraction projections ($4C^2$ each) and their biases. LayerNorm counts include the scales and biases of two normalizations per block and the final normalization. With $C$ fixed, changing $H$ changes the dimension per head while preserving the total attention parameter count. The attention weights $A$ computed for each input are intermediate values and are excluded from this count.
+
+The BPE configuration's 48 blocks, 25 heads, and 1,600 dimensions are selected by [`GPT.from_pretrained()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L207-L234) through `init_from='gpt2-xl'`. Tokenization and model size can be configured independently. The size differences in this table follow from the source repository's supplied training and fine-tuning configurations.
+
+OpenWebText uses 50,304 vocabulary entries: GPT-2's 50,257 rounded up to a multiple of 64 for computational efficiency. Shakespeare char reads its 65 entries from `meta.pkl`, using the [distinct characters counted during data preparation](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data/shakespeare_char/prepare.py). Pretrained GPT-2 XL uses the original vocabulary size of 50,257.
+
+The totals were counted by constructing [`GPT` in `model.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L118-L169) with the configurations above and evaluating `sum(p.numel() for p in model.parameters())`. Each trainable weight element is counted, including biases, trainable LayerNorm values, token embeddings, and position embeddings. Token embeddings and the output layer share their weights, so those shared elements are counted once. The `get_num_params()` value printed by nanoGPT at startup excludes position embeddings and is therefore smaller than the total reported here.
+
+Model size, batch size, learning rate, iteration count, dropout, evaluation count, and device all affect the result and runtime. Record the configuration and source commit so the experiment can be reproduced.
+
+**Linear and LayerNorm `bias`** controls whether these layers have trainable additive terms. A Linear layer adds a bias to its linear transformation. LayerNorm adds a bias after multiplying normalized values by a trainable scale. With `False`, Linear weights and LayerNorm scales still train. The `lm_head` always uses `bias=False`, independently of this setting.
+
+**`dropout`** is the probability of randomly setting each element to zero at dropout sites during training. For example, `0.2` sets each element to zero with a 20% probability and scales retained values by $1/(1-0.2)$. nanoGPT applies it to the sum of embeddings, attention weights and outputs, and MLP outputs to reduce dependence on particular features. It is disabled during evaluation and text generation. Dropout itself has no trainable parameters.
+
+</details>
 
 ## A recommended source-reading order
 

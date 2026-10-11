@@ -2,6 +2,7 @@ node_modules/
 dist/
 .astro/
 public/data/nanoGPT-master/
+public/data/nanogpt/
 public/data/nanochat-master/
 package-lock.json
 AGENTS.md

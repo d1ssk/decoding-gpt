@@ -33,7 +33,7 @@ export const nanoGptChapters: Chapter[] = [
       ja: 'トークンと位置の埋め込み',
       en: 'Token and Position Embeddings',
     },
-    published: false,
+    published: true,
   },
   {
     order: 4,

@@ -39,6 +39,41 @@ The site is statically built with Astro and deployed by `.github/workflows/deplo
 
 Source repository references used in articles should be tied to specific commits where appropriate.
 
+## Local nanoGPT dataset preparation
+
+`public/data/nanogpt/` holds a local working copy of `public/data/nanoGPT-master/`.
+Both directories are gitignored and outside Astro's `public/site/` asset directory.
+The copied source files are unchanged and were verified against nanoGPT commit
+`3adf61e154c3fe3fca428ad6bc3818b27a3b8291`.
+
+With that local copy in place, run both original preparation scripts from this
+repository's root:
+
+```bash
+python3 -m venv lab/nanogpt/.venv
+lab/nanogpt/.venv/bin/python -m pip install numpy requests tiktoken
+lab/nanogpt/.venv/bin/python public/data/nanogpt/data/shakespeare_char/prepare.py
+TIKTOKEN_CACHE_DIR=lab/nanogpt/.tiktoken-cache lab/nanogpt/.venv/bin/python public/data/nanogpt/data/shakespeare/prepare.py
+```
+
+Each script reads `input.txt` in its own dataset directory and overwrites
+`train.bin` and `val.bin` there. The character version also writes `meta.pkl`.
+For reproducible inputs, place the corpus from the pinned `SOURCE_URL` below
+in both directories before running; its SHA-256 must be
+`86c4e6aa9db7c042ec79f339dcb96d42b0075e16b8fc2e86bf0ca57e2dc565ed`.
+Without `input.txt`, the original scripts download from the source repository's
+`master` branch. BPE preparation also downloads GPT-2 encoding files on its first
+run and keeps them in the local cache specified above.
+
+| Dataset directory        | Training tokens | Validation tokens |
+| ------------------------ | --------------: | ----------------: |
+| `data/shakespeare_char/` |       1,003,854 |           111,540 |
+| `data/shakespeare/`      |         301,966 |            36,059 |
+
+Both binary formats store `uint16` IDs (two bytes per token). Keep the full corpus,
+binary files, and source copy local; published visualizations use the lightweight
+artifacts in `public/site/data/`.
+
 ## Article example data
 
 Chapter 01 uses a small, deterministic character-tokenization example. Regenerate
@@ -93,6 +128,42 @@ comments omitted, followed by an interactive section. The demo shows source
 indices, IDs, and characters in three rows; the input and target tables emphasize
 IDs. Prediction examples show IDs first, with characters in parentheses.
 When changing the excerpt, verify it against the pinned source commit.
+
+## Embedding example
+
+Chapter 03 exports weights and sums from an initialized, untrained nanoGPT model.
+Use a Python environment with PyTorch installed (the published artifact records
+PyTorch 2.8.0 on CPU), and supply the unchanged `model.py` from the pinned commit:
+
+```bash
+python experiments/nanogpt/embeddings.py /path/to/nanoGPT/model.py
+npx prettier --write public/site/data/nanogpt/embeddings.json
+```
+
+The generator verifies the source file's SHA-256 before importing it. It records
+the source commit, seed, full model configuration, environment, embedding weights,
+and initial sums. It checks those sums against the actual first Transformer
+block's input at several input lengths, including `block_size`, and checks that
+longer inputs are rejected. No checkpoint is saved. Exact initialization values
+can vary across PyTorch versions and execution environments.
+
+`EmbeddingInspector.astro` renders the saved example at build time. Browser
+controls select a batch position and edit a token, with input length fixed at six, while
+keeping the full learned weight tables available in an expandable section. New sums use float32 rounding
+before being displayed to four decimal places. The weights remain fixed; these
+controls do not train a model. The site build and runtime need neither Python nor
+PyTorch. Both translations include a runnable shape/equality check using the
+same configuration.
+
+The example model uses `n_embd = 3`. `EmbeddingVectorPlot.astro` and
+`src/lib/embedding-plot.ts` render those three components with an orthographic
+projection, a shared axis scale, and a fixed extent covering all token/position
+combinations. Dragging (including touch) or arrow keys rotates the view. A slider
+controls zoom; an unchecked-by-default checkbox moves the position arrow from
+the origin to the token tip.
+The sum stays fixed during translation. Numeric tables and the initial SVG also
+render without JavaScript. This uses SVG and pointer events with no plotting
+dependency or external runtime service.
 
 ## Sitemaps
 

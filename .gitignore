@@ -144,6 +144,7 @@ vite.config.ts.timestamp-*
 
 # Local upstream source snapshots (reference only; never deployed)
 public/data/nanoGPT-master/
+public/data/nanogpt/
 public/data/nanochat-master/
 
 # Astro

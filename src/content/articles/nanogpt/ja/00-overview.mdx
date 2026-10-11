@@ -15,6 +15,8 @@ upstream:
     - train.py
     - sample.py
     - configurator.py
+    - config/train_shakespeare_char.py
+    - config/finetune_shakespeare.py
     - data/*/prepare.py
 experimentId: nanogpt-00-overview
 ---
@@ -243,22 +245,6 @@ model の初期化には3つの入口があります。
 
 この3つの経路は開始時の weight こそ異なりますが、最終的には同じ `GPT` instance と同じ training loop へ合流します。
 
-## config は実験条件そのもの
-
-nanoGPT では、architecture と学習条件を `train.py` の default から、`config/*.py` と `--key=value` で上書きします。[`configurator.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/configurator.py#L20-L47) は小さな仕組みですが、実験の再現性を考える上では重要です。
-
-たとえば、参照元リポジトリの default と文字単位 Shakespeare の config では、規模が大きく異なります。
-
-| 設定                | `train.py` default | Shakespeare character config |
-| ------------------- | -----------------: | ---------------------------: |
-| context length      |               1024 |                          256 |
-| Transformer blocks  |                 12 |                            6 |
-| attention heads     |                 12 |                            6 |
-| embedding dimension |                768 |                          384 |
-| dataset             |        OpenWebText |             Tiny Shakespeare |
-
-model size、batch size、learning rate、iteration 数、dropout、評価回数、device は、いずれも結果や実行時間に影響します。実験を再現できるように、使用した config と commit を記録します。
-
 ## 学習と生成はどこまで同じか
 
 学習と生成は、token ID から hidden state と logits を得るところまで同じ model を共有します。違うのは、得られた logits をどのように使うかです。
@@ -272,6 +258,63 @@ model size、batch size、learning rate、iteration 数、dropout、評価回数
 | 繰り返し単位    | batch                   | 生成する1 token                        |
 
 `train.py` と `sample.py` は、同じ `GPT.forward()` をそれぞれ学習と生成のために呼び出しています。
+
+## config は実験条件そのもの
+
+nanoGPT では、architecture と学習条件を `train.py` の default から、`config/*.py` と `--key=value` で上書きします。[`configurator.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/configurator.py#L20-L47) は小さな仕組みですが、実験の再現性を考える上では重要です。
+
+### デフォルトのモデル構成とパラメータ数
+
+参照元リポジトリには、OpenWebText 用のデフォルト、Shakespeare の文字単位（char）用設定、GPT-2 の BPE を使う Shakespeare 用設定があります。以下は、それぞれを追加の上書きなしで使った場合のモデル構成です。
+
+- **OpenWebText**：[`train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py) のデフォルトで、GPT-2 相当のモデルを新規学習します。
+- **Shakespeare char**：[`config/train_shakespeare_char.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/config/train_shakespeare_char.py) で、小型モデルを新規学習します。
+- **Shakespeare BPE**：[`config/finetune_shakespeare.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/config/finetune_shakespeare.py) で、学習済みの **GPT-2 XL** を読み込み、fine-tuning します。
+
+表では、本文の $V$（語彙サイズ）、$C$（embedding 次元数）、$H$（head 数）に加え、$L$ を block 数、$T_{\max}$ を最大入力 token 数（`block_size`）とします。実際の入力長 $T$ は $T \leq T_{\max}$ です。$\delta$ は bias を使う場合に 1、使わない場合に 0 とします。下段の内訳は、それぞれに含まれる学習可能なパラメータの要素数です。
+
+<div className="model-parameters-table" role="region" aria-label="モデル構成とパラメータ数の比較" tabIndex={0}>
+
+| 項目                            | 記号・計算式            |     OpenWebText | Shakespeare char |   Shakespeare BPE |
+| ------------------------------- | ----------------------- | --------------: | ---------------: | ----------------: |
+| token 化                        | —                       |       GPT-2 BPE |         文字単位 |         GPT-2 BPE |
+| 語彙サイズ `vocab_size`         | $V$                     |          50,304 |               65 |            50,257 |
+| 最大入力長 `block_size`         | $T_{\max}$              |           1,024 |              256 |             1,024 |
+| Transformer block 数 `n_layer`  | $L$                     |              12 |                6 |                48 |
+| attention head 数 `n_head`      | $H$                     |              12 |                6 |                25 |
+| embedding 次元数 `n_embd`       | $C$                     |             768 |              384 |             1,600 |
+| head ごとの次元数               | $d_{\text{head}} = C/H$ |              64 |               64 |                64 |
+| MLP の中間次元数                | $4C$                    |           3,072 |            1,536 |             6,400 |
+| Linear 層・LayerNorm の `bias`  | $\delta$                |     `False` (0) |      `False` (0) |        `True` (1) |
+| `dropout`                       | —                       |             0.0 |              0.2 |               0.0 |
+| token embedding（出力層と共有） | $VC$                    |      38,633,472 |           24,960 |        80,411,200 |
+| position embedding              | $T_{\max}C$             |         786,432 |           98,304 |         1,638,400 |
+| attention（全 block）           | $L(4C^2 + 4\delta C)$   |      28,311,552 |        3,538,944 |       491,827,200 |
+| MLP（全 block）                 | $L(8C^2 + 5\delta C)$   |      56,623,104 |        7,077,888 |       983,424,000 |
+| LayerNorm（全 block と最終層）  | $(2L+1)C(1+\delta)$     |          19,200 |            4,992 |           310,400 |
+| **総パラメータ数**              | 上記 5 項目の合計       | **124,373,760** |   **10,745,088** | **1,557,611,200** |
+| 総数の概数（M = 100 万）        | —                       |         124.37M |           10.75M |         1,557.61M |
+
+</div>
+
+<details className="model-parameters-notes">
+<summary>表の注</summary>
+
+attention の内訳は、query・key・value を作る線形変換（$3C^2$）と出力の線形変換（$C^2$）、および有効な場合の bias です。MLP は拡張・縮小の 2 つの線形変換（それぞれ $4C^2$）と bias、LayerNorm は各 block の 2 か所と最終層の scale・bias を数えます。$C$ を固定すると、head 数 $H$ は各 head の次元数を変え、attention の総パラメータ数は同じになります。入力ごとに計算される参照の重み $A$（attention weight）は中間計算の値なので、この集計から除きます。
+
+BPE 用設定の 48 blocks・25 heads・1,600 次元は、`init_from='gpt2-xl'` によって [`GPT.from_pretrained()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L207-L234) が選ぶ構成です。データの token 化とモデルの規模は別々に設定できます。この表の規模の違いは、参照元リポジトリが用意した新規学習・fine-tuning の設定に由来します。
+
+OpenWebText の 50,304 は、GPT-2 の語彙数 50,257 を計算効率のために 64 の倍数へ切り上げた値です。Shakespeare char の 65 は、[データ準備時に数えた文字の種類数](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data/shakespeare_char/prepare.py) を `meta.pkl` から読み込みます。学習済み GPT-2 XL は元の語彙サイズ 50,257 を使います。
+
+総パラメータ数は、[`model.py` の `GPT`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L118-L169) に上表の構成を渡し、`sum(p.numel() for p in model.parameters())` で数えた値です。学習可能な重みの各要素を数え、bias と LayerNorm の学習可能な値、token embedding、position embedding を含めています。token embedding と出力層は重みを共有するため、共有分は 1 回だけ数えます。nanoGPT が起動時に表示する `get_num_params()` の値は position embedding を除くため、この表の総数より小さくなります。
+
+model size、batch size、learning rate、iteration 数、dropout、評価回数、device は、いずれも結果や実行時間に影響します。実験を再現できるように、使用した config と commit を記録します。
+
+**Linear 層・LayerNorm の `bias`** は、学習可能な加算項を使うかどうかを指定します。Linear 層では線形変換の結果に bias を足し、LayerNorm では正規化した値に学習可能な scale を掛けた後、bias を足します。`False` の場合も Linear 層の weight と LayerNorm の scale は学習します。`lm_head` はこの設定によらず `bias=False` です。
+
+**`dropout`** は、学習時に dropout を適用する箇所で、各要素をランダムに 0 にする確率です。たとえば `0.2` は各要素を 20% の確率で 0 にし、残した値を $1/(1-0.2)$ 倍にします。nanoGPT では embedding の加算結果、attention の参照の重みと出力、MLP の出力に適用し、特定の特徴への依存を抑えます。評価・文章生成時には無効になります。dropout 自体には学習可能なパラメータはありません。
+
+</details>
 
 ## source code を読む推奨順序
 

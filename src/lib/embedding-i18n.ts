@@ -1,0 +1,56 @@
+export const embeddingUi = {
+  ja: {
+    caption: '初期化直後の nanoGPT：埋め込みの取り出しと加算',
+    length: '入力長 T',
+    token: '選択位置のトークン',
+    reset: '入力を戻す',
+    input: '入力 X [B, T]（B = 2）',
+    tokenWeights: '学習する重み wte.weight [V, C] = [5, 3]',
+    positionWeights: '学習する重み wpe.weight [block_size, C] = [8, 3]',
+    addition: '選択位置での成分ごとの加算',
+    tokenRow: 'トークン',
+    positionRow: '位置',
+    sumRow: '合計',
+    plotTitle: '3 次元で見る e + p',
+    plotDetails: '操作と図の説明',
+    plotHint:
+      'ドラッグ／スワイプ、またはフォーカスして矢印キーで回転。Home キーで視点を戻せます。各軸 c0・c1・c2 は埋め込みの 3 成分です。',
+    plotDescription:
+      'e はトークン、p は位置、e + p は和です。位置ベクトルを平行移動すると、原点からトークン、続いて位置をたどる経路の終点が、和の先端と一致します。',
+    shift: '位置ベクトルをトークンの先端へ移動',
+    shiftHint:
+      'チェックを入れると、e の先端に p の始点を合わせます。外すと両方を原点から表示します。破線は原点からの p です。',
+    zoom: '拡大率',
+    viewReset: '視点を戻す',
+    weightsDetails: '埋め込みの重み全体を表示',
+    note: '学習前の値です。表示は小数点以下 4 桁に丸めています。数値表の色は符号（緑：正、茶：負）、濃さは絶対値を表します。灰色の位置の行は今回の入力では使いません。',
+    noScript: 'JavaScript が無効な場合は、保存済みの計算例を表示します。',
+  },
+  en: {
+    caption: 'Initialized nanoGPT: embedding lookup and addition',
+    length: 'Input length T',
+    token: 'Token at the selected position',
+    reset: 'Reset input',
+    input: 'Input X [B, T] (B = 2)',
+    tokenWeights: 'Learned weights wte.weight [V, C] = [5, 3]',
+    positionWeights: 'Learned weights wpe.weight [block_size, C] = [8, 3]',
+    addition: 'Elementwise addition at the selected position',
+    tokenRow: 'Token',
+    positionRow: 'Position',
+    sumRow: 'Sum',
+    plotTitle: 'e + p in three dimensions',
+    plotDetails: 'Controls and plot explanation',
+    plotHint:
+      'Drag or swipe to rotate, or focus the plot and use the arrow keys. Home resets the view. Axes c0, c1, and c2 are the three embedding components.',
+    plotDescription:
+      'e is the token, p is the position, and e + p is their sum. Translate the position vector: following the token vector and then the position vector reaches the tip of the sum.',
+    shift: 'Move the position vector to the token tip',
+    shiftHint:
+      'Check to place p at the tip of e. Uncheck to show both from the origin. The dashed line shows p from the origin.',
+    zoom: 'Zoom',
+    viewReset: 'Reset view',
+    weightsDetails: 'Show the full embedding weights',
+    note: 'These values are untrained and displayed to four decimal places. Table color encodes sign (green: positive, brown: negative); intensity encodes magnitude. Gray position rows are unused for this input.',
+    noScript: 'With JavaScript disabled, the saved computation is shown.',
+  },
+} as const;
