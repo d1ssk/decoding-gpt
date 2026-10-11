@@ -1,6 +1,12 @@
 <footer class="site-footer">
   <div>
     <p class="site-footer__mark">GPTを読み解く / Decoding GPT</p>
+    <p>
+      © {new Date().getFullYear()}{' '}
+      <a href="https://d1ssk.github.io/" rel="author">
+        Daichi Sasaki
+      </a>
+    </p>
   </div>
 </footer>
 
@@ -14,7 +20,8 @@
 
   .site-footer > div {
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between;
+    gap: 0.75rem 2rem;
     margin: 0 auto;
     max-width: var(--page-width);
     padding: 2rem var(--page-gutter) 3rem;
@@ -22,6 +29,10 @@
 
   .site-footer p {
     margin: 0;
+  }
+
+  .site-footer a {
+    color: var(--accent);
   }
 
   .site-footer__mark {
