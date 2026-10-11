@@ -198,7 +198,7 @@ nanoGPT の [`data/shakespeare/prepare.py`](https://github.com/karpathy/nanoGPT/
 
 保存先は文字単位では `data/shakespeare_char/`、GPT-2 の BPE では `data/shakespeare/` で、`train.bin` と `val.bin` の形式は共通です。文字単位では、本文から作った語彙と ID の対応を `meta.pkl` に保存しますが、GPT-2 の BPE では、既存の対応を `tiktoken` から読み込むため、`meta.pkl` は生成しません。
 
-## 次章の内容
+## 次の章へ
 
 ここまでで得たのは、語彙サイズ $V$ と、各要素が $0$ 以上 $V$ 未満の整数である1次元の ID 列です。文字列への復元には、変換時と同じ対応表が必要です。この ID 列が、embedding やトークン予測の計算への入力になります。
 

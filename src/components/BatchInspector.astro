@@ -1,0 +1,338 @@
+---
+import example from '../../public/site/data/nanogpt/training-batches.json';
+import { batchUi } from '../lib/batch-i18n';
+import type { Language } from '../lib/site';
+
+interface Props {
+  lang: Language;
+}
+
+const { lang } = Astro.props;
+const t = batchUi[lang];
+const prefix = `batch-${lang}`;
+const positions = Array.from({ length: example.data.length - 1 }, (_, i) => i);
+const selected = 1;
+const decode = (ids: number[]) =>
+  ids.map((id) => example.vocabulary[id]).join('');
+const character = (id: number) => example.vocabulary[id]?.replace('\n', '\\n');
+---
+
+<figure
+  class="batch-inspector"
+  data-batch-inspector
+  data-example={JSON.stringify(example)}
+>
+  <div class="table-scroll" role="region" aria-label={t.source} tabindex="0">
+    <table class="source">
+      <caption>{t.source}</caption>
+      <tbody>
+        <tr>
+          <th scope="row">index</th>
+          {example.data.map((_, index) => (
+            <th scope="col">{index}</th>
+          ))}
+        </tr>
+        <tr>
+          <th scope="row">ID</th>
+          {example.data.map((id) => (
+            <td>{id}</td>
+          ))}
+        </tr>
+        <tr>
+          <th scope="row">{t.character}</th>
+          {example.data.map((id) => (
+            <td>
+              <small>{character(id)}</small>
+            </td>
+          ))}
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p id={`${prefix}-hint`}>{t.hint}</p>
+  <div class="controls">
+    <label>
+      {t.length}: <output data-length-value>{example.blockSize}</output>
+      <input
+        data-length
+        type="range"
+        min="1"
+        max={positions.length}
+        value={example.blockSize}
+        aria-describedby={`${prefix}-hint`}
+        disabled
+      />
+    </label>
+    <label>
+      {t.position}: <output data-position-value>{selected}</output>
+      <input
+        data-position
+        type="range"
+        min="0"
+        max={example.blockSize - 1}
+        value={selected}
+        disabled
+      />
+    </label>
+    <button type="button" data-sampling disabled>
+      {t.sampling}
+    </button>
+  </div>
+  <p aria-live="polite" aria-atomic="true">
+    <output data-starts>ix = [{example.starts.join(', ')}]</output>
+  </p>
+  <p data-shape aria-live="polite">
+    X, Y: [2, {example.blockSize}] · B × T = {2 * example.blockSize}
+  </p>
+  {(['x', 'y'] as const).map((kind) => (
+    <div
+      class="table-scroll batch-array"
+      role="region"
+      aria-label={kind === 'x' ? t.input : t.target}
+      tabindex="0"
+    >
+      <table data-batch={kind}>
+        <caption>{kind === 'x' ? t.input : t.target}</caption>
+        <thead>
+          <tr>
+            <th scope="col">b \ t</th>
+            {positions.map((pos) => (
+              <th
+                scope="col"
+                data-column={pos}
+                hidden={pos >= example.blockSize}
+              >
+                {pos}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {example.starts.map((start, b) => (
+            <tr data-kind={kind} data-sample-index={b}>
+              <th scope="row">
+                b = {b}
+                <small>
+                  {t.start}: <output data-start-value={b}>{start}</output>
+                </small>
+              </th>
+              {positions.map((pos) => (
+                <td
+                  data-column={pos}
+                  hidden={pos >= example.blockSize}
+                  class:list={{
+                    context: kind === 'x' && pos <= selected,
+                    target: kind === 'y' && pos === selected,
+                  }}
+                >
+                  <span data-id>{example[kind][b][pos]}</span>
+                  <small data-char>{character(example[kind][b][pos])}</small>
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  ))}
+  <div class="predictions">
+    <p>{t.context}</p>
+    {example.starts.map((_, b) => (
+      <p class="prediction-row">
+        <span>b = {b}</span>
+        <code data-prediction={b}>
+          {`[${example.x[b].slice(0, selected + 1).join(', ')}] → ${example.y[b][selected]} (${JSON.stringify(decode(example.x[b].slice(0, selected + 1)))} → ${JSON.stringify(decode([example.y[b][selected]]))})`}
+        </code>
+      </p>
+    ))}
+  </div>
+  <noscript>
+    <p>{t.noScript}</p>
+  </noscript>
+</figure>
+
+<script>
+  import type savedExample from '../../public/site/data/nanogpt/training-batches.json';
+
+  document
+    .querySelectorAll<HTMLElement>('[data-batch-inspector]')
+    .forEach((root) => {
+      const example: typeof savedExample = JSON.parse(root.dataset.example!);
+      const length = root.querySelector<HTMLInputElement>('[data-length]')!;
+      const position = root.querySelector<HTMLInputElement>('[data-position]')!;
+      const sampling =
+        root.querySelector<HTMLButtonElement>('[data-sampling]')!;
+      let starts = [...example.starts];
+      const decode = (ids: number[]) =>
+        ids.map((id) => example.vocabulary[id]).join('');
+
+      function update() {
+        const size = Number(length.value);
+        position.max = String(size - 1);
+        const selected = Number(position.value);
+        root.querySelector('[data-length-value]')!.textContent = String(size);
+        root.querySelector('[data-position-value]')!.textContent =
+          String(selected);
+        root.querySelector('[data-shape]')!.textContent =
+          `X, Y: [2, ${size}] · B × T = ${2 * size}`;
+        root.querySelector('[data-starts]')!.textContent =
+          `ix = [${starts.join(', ')}]`;
+
+        root
+          .querySelectorAll<HTMLElement>('[data-start-value]')
+          .forEach((output) => {
+            output.textContent = String(
+              starts[Number(output.dataset.startValue)],
+            );
+          });
+        root.querySelectorAll<HTMLElement>('[data-column]').forEach((cell) => {
+          const pos = Number(cell.dataset.column);
+          cell.hidden = pos >= size;
+          const row = cell.parentElement!;
+          const kind = row.dataset.kind;
+          if (!kind || pos >= size) return;
+          const start = starts[Number(row.dataset.sampleIndex)];
+          const id = example.data[start + pos + (kind === 'y' ? 1 : 0)];
+          cell.querySelector('[data-char]')!.textContent = example.vocabulary[
+            id
+          ].replace('\n', '\\n');
+          cell.querySelector('[data-id]')!.textContent = String(id);
+          cell.classList.toggle('context', kind === 'x' && pos <= selected);
+          cell.classList.toggle('target', kind === 'y' && pos === selected);
+        });
+        root
+          .querySelectorAll<HTMLElement>('[data-prediction]')
+          .forEach((output) => {
+            const start = starts[Number(output.dataset.prediction)];
+            const context = example.data.slice(start, start + selected + 1);
+            const target = example.data[start + selected + 1];
+            output.textContent = `[${context.join(', ')}] → ${target} (${JSON.stringify(decode(context))} → ${JSON.stringify(decode([target]))})`;
+          });
+      }
+
+      function sampleBatch() {
+        const count = example.data.length - Number(length.value);
+        starts = example.starts.map(() => Math.floor(Math.random() * count));
+        update();
+      }
+
+      length.disabled = false;
+      position.disabled = false;
+      sampling.disabled = false;
+      length.addEventListener('input', sampleBatch);
+      position.addEventListener('input', update);
+      sampling.addEventListener('click', sampleBatch);
+    });
+</script>
+
+<style>
+  .batch-inspector {
+    border-block: 1px solid var(--line-strong);
+    margin: 2rem 0;
+    padding: 1.25rem 0;
+  }
+  .batch-inspector p,
+  label {
+    font-size: 0.85rem;
+  }
+  .batch-inspector .source th,
+  .batch-inspector .source td {
+    padding-block: 0.2rem;
+  }
+  .controls {
+    align-items: end;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem 2rem;
+  }
+  label {
+    display: block;
+  }
+  input {
+    display: block;
+    max-width: 100%;
+    accent-color: var(--accent);
+  }
+  input:focus-visible,
+  button:focus-visible,
+  .table-scroll:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+  button {
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 0.15rem;
+    color: var(--paper);
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.85rem;
+    padding: 0.45rem 0.9rem;
+  }
+  button:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+  [data-starts] {
+    font-family: var(--font-mono);
+  }
+  .batch-array,
+  .predictions {
+    border-top: 1px solid var(--line);
+    margin-top: 1rem;
+    padding-top: 1rem;
+  }
+  .table-scroll {
+    overflow-x: auto;
+  }
+  .batch-inspector table {
+    margin: 0.75rem 0;
+    width: max-content;
+    min-width: 100%;
+  }
+  caption {
+    text-align: left;
+    font-size: 0.8rem;
+  }
+  .batch-inspector th,
+  .batch-inspector td {
+    text-align: center;
+    padding: 0.4rem 0.55rem;
+    min-width: 2.5rem;
+    white-space: nowrap;
+  }
+  .batch-inspector th:first-child {
+    text-align: left;
+  }
+  td {
+    font-family: var(--font-mono);
+  }
+  td small,
+  th small {
+    display: block;
+    color: var(--ink-muted);
+    font-weight: normal;
+  }
+  .context {
+    background: var(--paper-subtle);
+    font-weight: 700;
+  }
+  .target {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+  .predictions .prediction-row {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+    margin: 0.5rem 0;
+  }
+  .prediction-row > span {
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+  }
+  [data-prediction] {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+</style>

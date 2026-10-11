@@ -1,0 +1,112 @@
+---
+title: 'Building Training Batches'
+description: 'Slice inputs and targets from a long token ID sequence and inspect batch shapes and the prediction at every position.'
+order: 2
+series: nanogpt
+lang: en
+translationKey: nanogpt-02-context-and-training-examples
+slug: 02-context-and-training-examples
+draft: false
+upstream:
+  repository: karpathy/nanoGPT
+  commit: 3adf61e154c3fe3fca428ad6bc3818b27a3b8291
+  sourceFiles:
+    - train.py
+    - model.py
+    - data/shakespeare_char/prepare.py
+experimentId: nanogpt-02-training-batches
+---
+
+import BatchInspector from '../../../../components/BatchInspector.astro';
+
+The previous chapter converted text into token IDs and saved separate training and validation files. This chapter turns those long token sequences into inputs `x` and targets `y` for the model.
+
+## Create inputs and targets from training data
+
+[`get_batch(split)` in `train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L109-L124) selects random positions in the saved data and slices inputs and targets for training. The argument `split` selects the data source: `'train'` reads the training file `train.bin`, and `'val'` reads the validation file `val.bin`.
+
+The training loop passes the `X, Y` returned by `get_batch()` to [`GPT.forward()` in `model.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py).
+
+```python
+X, Y = get_batch('train')
+logits, loss = model(X, Y)
+```
+
+A **batch** is a group of token sequences passed to the model together. `get_batch()` slices `batch_size` sequences of length `block_size` from randomly selected starting positions in the source data. Thus, `block_size` is the length of each sequence, and `batch_size` is the number of sequences processed together.
+
+`X` contains the model's inputs, and `Y` contains the **targets**: the next token to predict at each position. Both are two-dimensional arrays of shape `[batch_size, block_size]`, with one token sequence per row.
+
+For example, if the source data contains the token sequence `A B C D E` and `block_size = 4`, one row of the batch looks like this. The letters stand for actual token IDs.
+
+```text
+X[i] = [A, B, C, D]
+Y[i] = [B, C, D, E]
+```
+
+`Y[i]` is sliced one token ahead of `X[i]`. The model predicts the next token from the sequence through each position: `B` from `A`, `C` from `A B`, and so on.
+
+PyTorch represents these multidimensional arrays with a data structure called `Tensor`. Each element of `X` and `Y` is a token ID of dtype `torch.int64`. Inside `get_batch()`, these arrays use the lowercase variable names `x` and `y`.
+
+The model computes prediction scores, `logits`, for the next token at each position and compares them with the targets `Y` to calculate the loss.
+
+`batch_size`, `block_size`, and the data directory are all determined by settings in `train.py`.
+
+## The `get_batch()` implementation
+
+Here is the function from the source repository's [`train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L109-L124), with comments omitted. `data_dir` is the configured dataset directory, `data/<dataset>/`.
+
+```python
+def get_batch(split):
+    if split == 'train':
+        data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
+    else:
+        data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+    ix = torch.randint(len(data) - block_size, (batch_size,))
+    x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
+    y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
+    if device_type == 'cuda':
+        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
+    else:
+        x, y = x.to(device), y.to(device)
+    return x, y
+```
+
+First, `np.memmap()` exposes the token IDs stored in a file as a one-dimensional `uint16` array. This provides access to the required portions without loading the entire dataset into memory. It opens `train.bin` when `split == 'train'`, and `val.bin` otherwise, in read-only mode.
+
+Next, `torch.randint()` randomly selects `batch_size` starting positions and stores them in `ix`. For data length `N` and `block_size` equal to `T`, starts range from `0` through `N - T - 1`. Supplying a next-token target for every input position requires `T + 1` consecutive tokens, which determines this range. Starts are chosen independently, so the same position can be selected more than once, and sliced windows can overlap.
+
+From each start `i`, the function slices `data[i:i+block_size]` for the input and `data[i+1:i+1+block_size]` for the targets. Both sequences have length `block_size`, with the targets shifted one token ahead. Starting positions are independent of word and sentence boundaries, and the slices preserve the original token order.
+
+Each sequence is converted to 64-bit integers with `astype(np.int64)` and then to a PyTorch array with `torch.from_numpy()`. `torch.stack()` groups `batch_size` sequences along a new axis, producing the two-dimensional arrays `x` and `y` with shape `[batch_size, block_size]`. Stored `uint16` values take two bytes each, and converted `int64` values take eight, while the token IDs remain unchanged.
+
+The arrays are then moved to the memory of the device used for computation, such as a CPU or GPU. The `device` setting specifies that device. The arrays have been created in CPU memory, so GPU computation requires transferring them to GPU memory. Computation on NVIDIA GPUs uses a platform called **CUDA**. With CUDA, `pin_memory()` first pins the CPU memory to prevent it from being paged out, making transfer to the GPU more efficient. The subsequent `to(device, non_blocking=True)` performs the transfer. `non_blocking=True` lets the CPU proceed without waiting for the transfer to finish. In other cases, `to(device)` places the arrays on the specified device.
+
+Finally, the function returns the pair `(x, y)`. The training loop assigns these values to `X, Y` and passes them to the model.
+
+## Inspect the slices interactively
+
+This illustrative example encodes the previous chapter's `hello\nhello\n` using the vocabulary `['\n', 'e', 'h', 'l', 'o']`. With `B` fixed at `2`, the Sample button randomly selects starting positions for the entire batch at once. Changing `T` also resamples the starts for the new length.
+
+<BatchInspector lang="en" />
+
+## The input available for prediction
+
+For token sequence `b` in the batch, the input available for prediction at position `t` is `X[b, :t+1]`, from the beginning of that sequence through the current position. The target is the next token, `Y[b, t]`. Adjust the prediction-position control above to inspect the visible input and its corresponding target.
+
+However, the model receives the entire input `X` at once. Except at the final position, the target `Y[b, t]` also appears at the next input position, `X[b, t+1]`. Access to this future token would reveal the target directly, defeating the learning task. To prevent this, [`CausalSelfAttention`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py) uses a **causal mask**, allowing each position to access only itself and earlier positions. The arrays produced by `get_batch()` are passed directly to the model; the causal mask restricts the visible range during self-attention computation. Chapter 4, “Self-Attention,” will cover this mechanism.
+
+This allows the model to compute predictions at all `B × T` positions in parallel during one forward pass, while limiting each position to information available up to that point. Each prediction is compared with its corresponding target `Y[b, t]` to calculate the loss.
+
+## Using batches for training and validation
+
+During training, batches from `train.bin` are passed to the model, and the predictions and targets at each position are used to calculate the loss. Gradients are computed from that loss and used to update the model's weights.
+
+Validation uses batches of the same shape from `val.bin` to calculate the loss, while leaving the weights unchanged. The losses from several batches are averaged to evaluate prediction performance on data that was not used for training.
+
+Here, `batch_size` is the number of token sequences processed in one forward pass. nanoGPT can also accumulate gradients from several batches before performing a single weight update. The training-loop chapter will cover weight updates and how training and validation are organized.
+
+## In the next chapter
+
+As we have seen, a training batch pairs inputs `X`, sliced from a long token ID sequence, with targets `Y`, shifted one token ahead. Both are two-dimensional arrays of shape `[B, T]`, where `B = batch_size` and `T = block_size`. The model uses the token sequence through each position to predict the next token.
+
+The next chapter follows how each token ID in `X` is converted to an embedding vector and combined with an embedding representing its position. With embedding dimension `C`, this produces an array of shape `[B, T, C]`.

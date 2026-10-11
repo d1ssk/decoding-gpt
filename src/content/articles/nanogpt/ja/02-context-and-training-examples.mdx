@@ -1,0 +1,112 @@
+---
+title: '学習バッチの作成'
+description: '長い token ID 列から入力と正解を切り出し、学習バッチの形状と各位置の予測対象を確かめる。'
+order: 2
+series: nanogpt
+lang: ja
+translationKey: nanogpt-02-context-and-training-examples
+slug: 02-context-and-training-examples
+draft: false
+upstream:
+  repository: karpathy/nanoGPT
+  commit: 3adf61e154c3fe3fca428ad6bc3818b27a3b8291
+  sourceFiles:
+    - train.py
+    - model.py
+    - data/shakespeare_char/prepare.py
+experimentId: nanogpt-02-training-batches
+---
+
+import BatchInspector from '../../../../components/BatchInspector.astro';
+
+前章では、テキストを token ID の列に変換し、学習用と検証用のファイルへ保存しました。この章では、その長いトークン列からモデルに渡す入力 `x` と正解 `y` を作ります。
+
+## 学習データから入力と正解を作る
+
+[`train.py` の `get_batch(split)`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L109-L124) は、保存されたデータからランダムな位置を選び、学習に使う入力と正解を切り出す関数です。引数 `split` は使用するデータを指定し、`'train'` なら学習用の `train.bin`、`'val'` なら検証用の `val.bin` を読み込みます。
+
+学習ループでは、`get_batch()` が返した `X, Y` を [`model.py` の `GPT.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py) に渡します。
+
+```python
+X, Y = get_batch('train')
+logits, loss = model(X, Y)
+```
+
+ここで使う **batch（バッチ）** とは、一度にモデルへ渡す複数のトークン列のまとまりです。`get_batch()` は、元のデータから長さ `block_size` のトークン列を `batch_size` 個、ランダムな開始位置から切り出します。つまり、`block_size` は各トークン列の長さ、`batch_size` は一度に処理するトークン列の数を表します。
+
+`X` はモデルへの入力、`Y` は各位置で予測すべき次のトークンを並べた **正解（target）** です。どちらも形状 `[batch_size, block_size]` の2次元配列で、各行が1本のトークン列に対応します。
+
+たとえば、元のデータに `A B C D E` というトークン列があり、`block_size = 4` の場合、バッチ内のある行は次のようになります（実際の token ID を記号で表しています）。
+
+```text
+X[i] = [A, B, C, D]
+Y[i] = [B, C, D, E]
+```
+
+このように、`Y[i]` は `X[i]` から1トークン先にずらして切り出されます。モデルは `A` から `B` を、`A B` から `C` を予測するというように、各位置までのトークン列から次のトークンを予測します。
+
+PyTorch では、このような多次元配列を `Tensor` というデータ構造で扱います。`X` と `Y` の各要素は `torch.int64` 型の token ID です。なお、`get_batch()` の内部では、これらの配列を小文字の `x`, `y` という変数名で扱っています。
+
+モデルは各位置での次のトークンに対する予測スコア `logits` を計算し、正解 `Y` と比較して損失 `loss` を求めます。
+
+`batch_size`、`block_size`、データの保存先は、いずれも `train.py` 内の設定によって決まります。
+
+## `get_batch()` の実装
+
+参照元の [`train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L109-L124) にある関数を、コメントを省略して掲載します。`data_dir` は、設定された dataset の保存先 `data/<dataset>/` です。
+
+```python
+def get_batch(split):
+    if split == 'train':
+        data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
+    else:
+        data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+    ix = torch.randint(len(data) - block_size, (batch_size,))
+    x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
+    y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
+    if device_type == 'cuda':
+        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
+    else:
+        x, y = x.to(device), y.to(device)
+    return x, y
+```
+
+まず、`np.memmap()` で、ファイルに保存された token ID 列を `uint16` 型の1次元配列として扱います。これを使うと、データ全体をメモリに読み込む必要がなく、必要な部分にアクセスできます。`split == 'train'` なら `train.bin`、それ以外なら `val.bin` を読み取り専用で開きます。
+
+次に、`torch.randint()` で `batch_size` 個の開始位置をランダムに選び、`ix` に格納します。データ長を `N`、`block_size` を `T` とすると、開始位置は `0` から `N - T - 1` までです。入力の各トークンに対して次のトークンを正解として用意するには、連続する `T + 1` 個のトークンが必要になるため、この範囲に制限しています。開始位置は独立に選ばれるので、同じ位置が複数回選ばれたり、切り出す範囲が重なったりすることもあります。
+
+続いて、各開始位置 `i` から、入力 `data[i:i+block_size]` と正解 `data[i+1:i+1+block_size]` を切り出します。どちらも長さ `block_size` のトークン列で、正解だけを1トークン先にずらしています。切り出す位置は単語や文の区切りとは無関係で、元のトークンの並びをそのまま使います。
+
+各トークン列は `astype(np.int64)` で64ビット整数に変換し、`torch.from_numpy()` で PyTorch の配列にします。さらに、`torch.stack()` で `batch_size` 本を新しい軸に沿ってまとめ、形状 `[batch_size, block_size]` の2次元配列 `x`, `y` を作ります。保存時の `uint16` は1要素2バイト、変換後の `int64` は8バイトですが、token ID の値は変わりません。
+
+最後に、配列を計算に使う装置（CPU や GPU）のメモリへ移します。その装置を指定する設定値が `device` です。ここまでの処理で配列は CPU のメモリ上に作られているため、GPU で計算する場合は GPU 側のメモリへ転送する必要があります。NVIDIA 製 GPU での計算には、**CUDA** という計算プラットフォームを利用します。CUDA を使う場合、まず `pin_memory()` で CPU 側のメモリを固定し、データがメモリから退避されないようにすることで GPU への転送を効率化します。続く `to(device, non_blocking=True)` が実際の転送を行います。`non_blocking=True` は、CPU が転送の完了を待たずに次の処理へ進めるようにする指定です。それ以外の場合は、`to(device)` で指定された装置に配列を配置します。
+
+最後に、こうして用意した `(x, y)` を返します。学習ループでは、この返り値を `X, Y` に代入してモデルに渡します。
+
+## 配列の切り出しを操作して確かめる
+
+この図は、前章の `hello\nhello\n` を語彙 `['\n', 'e', 'h', 'l', 'o']` で ID に変換した説明用の例です。`B = 2` に固定し、「サンプル」ボタンでバッチ全体の開始位置をまとめてランダムに選びます。`T` を変えたときも、その長さに合わせて開始位置を選び直します。
+
+<BatchInspector lang="ja" />
+
+## 予測に使える入力の範囲
+
+バッチ内の `b` 番目のトークン列について、位置 `t` での予測に使えるのは、先頭からその位置までの `X[b, :t+1]` です。また、予測すべき正解は、次のトークン `Y[b, t]` です。上の図で「予測する位置」を動かすと、参照できる入力の範囲と対応する正解を確認できます。
+
+ただし、モデルには入力 `X` の全体が一度に渡されます。位置 `t` の正解 `Y[b, t]` は、最後の位置を除けば、入力の次の位置 `X[b, t+1]` にも含まれています。この未来のトークンを参照できると、予測すべき正解がそのままわかってしまい学習になりません。そこで、[`CausalSelfAttention`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py) では **causal mask** を使い、各位置が自分自身とそれ以前の位置だけを参照できるようにします。`get_batch()` が作った配列はそのままモデルに渡し、causal mask による参照範囲の制限は self attention の計算時に適用します。その仕組みは第4章「self attention」で扱います。
+
+これにより、各位置で使える情報をその位置までに限定しながら、バッチ内の全 `B × T` 位置の予測を 1 回の forward で並列に計算できます。それぞれの予測を対応する正解 `Y[b, t]` と比較して、損失 `loss` を求めます。
+
+## バッチを学習と検証に使う
+
+学習では、`train.bin` から作ったバッチをモデルに渡し、各位置の予測と正解から損失を計算します。その損失をもとに勾配を求め、モデルの重みを更新します。
+
+検証では、`val.bin` から同じ形状のバッチを作り、損失を計算します。ただし、重みの更新は行いません。複数のバッチで求めた損失を平均し、学習に使っていないデータに対する予測性能を評価します。
+
+ここでの `batch_size` は、1回の forward で処理するトークン列の数です。nanoGPT では、複数のバッチから求めた勾配を蓄積し、まとめて1回の重み更新を行うこともできます。重みの更新方法や学習・検証の進め方は、学習ループの章で扱います。
+
+## 次の章へ
+
+ここまで見てきたように、学習バッチは、長い token ID 列から切り出した入力 `X` と、それを1トークン先にずらした正解 `Y` の組です。どちらも形状 `[B, T]` の2次元配列で、`B = batch_size`、`T = block_size` です。モデルは各位置までのトークン列を使って、次のトークンを予測します。
+
+次の章では、入力 `X` の各 token ID を embedding ベクトルに変換し、位置情報を表す embedding を加えることで、embedding ベクトルの次元を`C` として形状 `[B, T, C]` の配列を作る過程を追います。

@@ -71,6 +71,29 @@ artifact. Only the vocabulary and initial example are published, not the corpus.
 input in the browser with that fixed vocabulary. Unknown characters produce an
 error. No network or Python runtime is needed to use the demo.
 
+## Training batch example
+
+Chapter 02 uses a deterministic 12-token input with fixed starting positions.
+Regenerate its artifact with Python 3 (standard library only):
+
+```bash
+python3 experiments/nanogpt/training_batches.py
+npx prettier --write public/site/data/nanogpt/training-batches.json
+```
+
+The generator checks all valid window lengths and starts, the final target at
+the data boundary, and invalid inputs. `BatchInspector.astro` renders the saved
+batch at build time and computes new slices in the browser when controls change.
+This is an educational computation, not a trained-model result. The demo fixes
+`B = 2`. The Sample button independently draws both starts, with replacement,
+from `0` through `N - T - 1`. Changing `T` also resamples the entire batch;
+changing the prediction position `t` preserves the selected starts.
+The articles show the source repository’s `get_batch()` implementation, with
+comments omitted, followed by an interactive section. The demo shows source
+indices, IDs, and characters in three rows; the input and target tables emphasize
+IDs. Prediction examples show IDs first, with characters in parentheses.
+When changing the excerpt, verify it against the pinned source commit.
+
 ## Sitemaps
 
 The existing `@astrojs/sitemap` integration generates `dist/sitemap-index.xml`

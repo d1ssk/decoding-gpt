@@ -24,7 +24,7 @@ export const nanoGptChapters: Chapter[] = [
     order: 2,
     slug: '02-context-and-training-examples',
     title: { ja: '学習バッチの作成', en: 'Building Training Batches' },
-    published: false,
+    published: true,
   },
   {
     order: 3,

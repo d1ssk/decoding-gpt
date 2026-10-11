@@ -1,0 +1,28 @@
+export const batchUi = {
+  ja: {
+    length: '系列長 T',
+    start: '開始位置 i',
+    position: '予測する位置 t',
+    source: '元の ID 列',
+    character: '文字',
+    sampling: 'サンプル',
+    input: '入力 X',
+    target: '正解 Y',
+    context: '参照できる入力 → 正解',
+    hint: '太字の入力が位置 t で参照できる範囲、枠付きの正解が予測対象です。\\n は改行です。B = 2 に固定しています。',
+    noScript: 'JavaScript が無効な場合は、保存済みの計算例を表示します。',
+  },
+  en: {
+    length: 'Sequence length T',
+    start: 'Start index i',
+    position: 'Prediction position t',
+    source: 'Source IDs',
+    character: 'Character',
+    sampling: 'Sample',
+    input: 'Input X',
+    target: 'Target Y',
+    context: 'Visible input → target',
+    hint: 'Bold input marks the context visible at position t; the outlined target is the token to predict. \\n denotes a newline. B is fixed at 2.',
+    noScript: 'With JavaScript disabled, the saved computation is shown.',
+  },
+} as const;
