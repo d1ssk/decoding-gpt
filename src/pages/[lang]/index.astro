@@ -50,7 +50,7 @@ const t = useTranslations(lang);
     <article>
       <div class="path-number">01</div>
       <div>
-        <p class="path-status">{t.startHere}</p>
+        <p class="path-status">{t.nanoGptStatus}</p>
         <h2>
           <a href={localizedPath(lang, 'nanogpt/#chapters')}>nanoGPT</a>
         </h2>
@@ -116,10 +116,10 @@ const t = useTranslations(lang);
 
   .home-hero h1 {
     font-family: var(--font-display);
-    font-size: clamp(3.6rem, 11vw, 8.4rem);
+    font-size: var(--page-title-size);
     font-weight: 500;
     letter-spacing: -0.06em;
-    line-height: 0.95;
+    line-height: 1.25;
     margin: 1rem 0 1.5rem;
   }
 
@@ -226,11 +226,6 @@ const t = useTranslations(lang);
   }
 
   @media (max-width: 44rem) {
-    .home-hero h1 {
-      font-size: clamp(2.5rem, 10vw, 4rem);
-      line-height: 1.1;
-    }
-
     .paths {
       grid-template-columns: 1fr;
     }

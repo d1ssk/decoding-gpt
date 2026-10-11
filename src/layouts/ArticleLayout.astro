@@ -166,10 +166,10 @@ const articleNumber = String(data.order).padStart(2, '0');
 
   h1 {
     font-family: var(--font-display);
-    font-size: clamp(2.5rem, 7vw, 5rem);
+    font-size: var(--page-title-size);
     font-weight: 540;
     letter-spacing: -0.04em;
-    line-height: 1.02;
+    line-height: 1.25;
     margin: 0;
   }
 
@@ -259,6 +259,10 @@ const articleNumber = String(data.order).padStart(2, '0');
   .source-metadata dt,
   .source-metadata p {
     color: var(--ink-muted);
+  }
+
+  .source-metadata dd {
+    overflow-wrap: anywhere;
   }
 
   .source-metadata p {

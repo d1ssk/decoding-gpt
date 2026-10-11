@@ -22,9 +22,9 @@ experimentId: nanogpt-00-overview
 import ChapterList from '../../../../components/ChapterList.astro';
 import PipelineDiagram from '../../../../components/PipelineDiagram.astro';
 
-nanoGPT is a compact codebase for training and generating with GPT-2-style language models. At its center are roughly 300 lines in `model.py`, which define the model, and roughly 300 lines in `train.py`, which run training. Data preparation, configuration, generation, and benchmarking code surround those two files.
+nanoGPT supports training GPT-2-style language models and generating text with them. Its minimal implementation makes the model’s mechanisms easier to understand. At its center are roughly 300 lines in `model.py`, which define the model, and roughly 300 lines in `train.py`, which run training. Data preparation, configuration, generation, and benchmarking code surround those two files.
 
-The repository is small, but it is not a line-by-line teaching implementation. GPU execution, mixed precision, distributed training, checkpoints, and loading GPT-2 weights all live in the same code. Reading it from the first line to the last can therefore hide the main idea. It is easier to begin with the path of **one batch of tokens across files and through tensor transformations**.
+This small codebase includes GPU execution, mixed precision, distributed training, checkpoints, and loading GPT-2 weights. Start by following **one batch of tokens across files and through multidimensional array transformations** to understand the computation flow and each operation's role.
 
 nanoGPT can be organized into four parts:
 
@@ -33,11 +33,9 @@ nanoGPT can be organized into four parts:
 3. The training loop that turns loss into parameter updates
 4. Sampling that turns trained weights into generated text
 
-All upstream references are pinned to [`karpathy/nanoGPT`](https://github.com/karpathy/nanoGPT/tree/3adf61e154c3fe3fca428ad6bc3818b27a3b8291) at commit `3adf61e154c3fe3fca428ad6bc3818b27a3b8291`. Source links and line numbers on this page refer to that commit.
-
 ## What nanoGPT covers
 
-nanoGPT is centered on **next-token prediction** with a decoder-only Transformer. Given a token sequence, the model assigns a score to every possible next token at every position. Repeating that computation over a large text corpus gives us pretraining. Continuing from existing weights with a lower learning rate gives us fine-tuning. Feeding each predicted token back into a trained model gives us generation.
+nanoGPT is centered on **next-token prediction** with a decoder-only Transformer. Given a token sequence, the model assigns a score to every possible next token at every position. Repeating that computation and updating the weights over a large text corpus gives us pretraining. Continuing from existing weights with a lower learning rate gives us fine-tuning. Feeding each predicted token back into a trained model gives us generation.
 
 ```text
 pretraining   : random weights + token data → trained weights
@@ -45,11 +43,11 @@ fine-tuning   : pretrained weights + new token data → adapted weights
 generation    : trained weights + prompt → one token → append → repeat
 ```
 
-nanoGPT alone is not an entire ChatGPT-like system. Conversation formats, instruction tuning, preference optimization, tool use, serving, and a chat UI are outside its core scope. This series first uses nanoGPT to understand the language-modeling core, then moves to nanochat for a wider stack.
+A conversational system such as ChatGPT combines this core with conversation formats, instruction tuning, preference optimization, tool use, serving, and a chat UI. This series first uses nanoGPT to understand the language-modeling core, then moves to nanochat for conversational model training, evaluation, and inference.
 
-## A map of the repository
+## Repository structure
 
-Grouped by responsibility, the upstream top level looks like this:
+Grouped by responsibility, the source repository’s top level looks like this:
 
 ```text
 nanoGPT/
@@ -59,7 +57,7 @@ nanoGPT/
 ├── configurator.py                override settings from config files and the CLI
 ├── bench.py                       benchmark forward and backward passes
 ├── config/
-│   ├── train_shakespeare_char.py  small character-level GPT settings
+│   ├── train_shakespeare_char.py  settings for a small-scale character-level GPT
 │   ├── train_gpt2.py              GPT-2 124M reproduction settings
 │   ├── finetune_shakespeare.py    GPT-2 fine-tuning settings
 │   └── eval_gpt2*.py              pretrained GPT-2 evaluation settings
@@ -82,13 +80,12 @@ The main locations have the following responsibilities:
 | [`configurator.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/configurator.py) and `config/` | Override default experiment settings                                               | Model size, data, learning rate, and runtime          |
 | [`bench.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/bench.py)                             | Isolate and time the center of the training loop                                   | Iteration time, MFU, and bottlenecks                  |
 
-Reading only `model.py` does not show how GPT is trained. Reading only `train.py` does not reveal what happens inside `model(X, Y)`. Understanding nanoGPT requires moving between **the values flowing through the model** and **the control flow connecting the files**.
+Read `model.py` to inspect the computation inside `model(X, Y)`, and `train.py` to see how training uses it. Moving between **the data values** and **the control flow connecting the files** connects model computation to parameter updates.
 
-## One path from text to generated text
+## One path from training text to generation
 
 <PipelineDiagram
-  caption="Conceptual flow / nanoGPT end to end"
-  note="This is a conceptual map. Evaluation, gradient accumulation, mixed precision, DDP, and checkpoint handling surround the core path during real training."
+  note="This is a conceptual diagram. Evaluation, gradient accumulation, mixed precision, DDP, and checkpoint handling surround the core path during real training."
   steps={[
     { label: 'Prepare data', detail: 'text → token IDs' },
     { label: 'Token stream', detail: 'train.bin / val.bin' },
@@ -101,43 +98,49 @@ Reading only `model.py` does not show how GPT is trained. Reading only `train.py
 
 ### 1. Turn data into token IDs
 
-The model never receives strings directly. A `prepare.py` script tokenizes text and converts it into a sequence of integers.
+The model receives a sequence of token IDs. A `prepare.py` script tokenizes text and converts it into those integers.
 
-The character-level [`data/shakespeare_char/prepare.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data/shakespeare_char/prepare.py#L19-L61) gathers the characters in the corpus, uses `stoi` to map characters to IDs, and uses `itos` for the reverse direction. Datasets that use the same BPE as GPT-2 rely on `tiktoken` for that role.
+The character-level [`data/shakespeare_char/prepare.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data/shakespeare_char/prepare.py#L19-L61) gathers the characters in the corpus, uses `stoi` to map characters to IDs, and uses `itos` for the reverse direction. Datasets that use the same BPE (Byte Pair Encoding, a method that merges frequently occurring sequences into tokens) as GPT-2 rely on `tiktoken` for that role.
 
-Data preparation produces three central artifacts:
+Data preparation produces three main files:
 
 - `train.bin`: the token stream used for parameter updates
 - `val.bin`: a separate token stream used to estimate loss
 - `meta.pkl`: vocabulary size and encode/decode metadata for character data
 
-The binary files contain one long concatenated token stream, not a table of documents. Training constructs context windows by taking slices from that stream.
+The binary files contain one long concatenated token stream. Training constructs context windows by taking slices from that stream.
 
 ### 2. Create inputs and targets one token apart
 
-[`get_batch()` in `train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L114-L131) selects random starting positions. It takes `block_size` tokens for input `x` and the same window shifted forward by one token for target `y`.
+[`get_batch()` in `train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L114-L131) randomly selects $B$ starting positions in the token stream. From each position, it takes `block_size` tokens for input `x`. It shifts the starting position forward by one token and takes the same number of tokens for target `y`.
+
+The following shows one sample with `block_size = 8`. Each character is treated as one token for illustration; the actual `x` and `y` contain integer token IDs.
 
 ```text
-token stream : G  P  T  predicts  the  next  token
-input x      : G  P  T  predicts  the  next
-target y     : P  T  predicts  the  next  token
+token stream : G  P  T  は  次  を  予  測  す  る
+input x      : G  P  T  は  次  を  予  測
+target y     : P  T  は  次  を  予  測  す
 ```
 
-If batch size is $B$ and context length is $T$, both `x` and `y` have shape $B \times T$. One forward pass therefore evaluates $B \times T$ next-token predictions at once.
+If batch size is $B$ and the number of input tokens is $T$, both `x` and `y` have shape $B \times T$. Here, $T = \texttt{block\_size}$.
+
+At each position, the model **uses the input up to and including that position to predict the next token**. In this example, the first position predicts `P` from `G`, and the last position predicts `す` from `GPTは次を予測` (the full sentence means “GPT predicts the next token”). A causal mask prevents each position from attending to future tokens.
+
+During training, one forward pass computes predictions at all $B \times T$ positions in parallel and compares them with the corresponding targets in `y` to calculate the loss.
 
 ### 3. Let GPT compute logits
 
-`x` enters [`GPT.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L170-L193). The model adds token and position embeddings, passes the result through multiple Transformer blocks, and uses a language-model head to produce one score for every vocabulary token.
+`x` enters [`GPT.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L170-L193). First, token embeddings convert each token ID into a high-dimensional vector, while position embeddings convert token positions into vectors of the same dimension. The two are added together. The result passes through multiple Transformer blocks, where self-attention incorporates information from the current and preceding token positions, and an MLP updates each position’s representation. Finally, a linear layer called the language-model head converts each position’s vector into one score per vocabulary token. These scores, before conversion to probabilities, are called **logits**.
 
 ```python
 logits, loss = model(X, Y)
 ```
 
-The logits have shape $B \times T \times V$, where $V$ is vocabulary size. `logits[b, t, v]` is the unnormalized score for token `v` being next at position `t` in batch item `b`.
+The logits have shape $B \times T \times V$, where $B$ is batch size, $T$ is sequence length, and $V$ is vocabulary size. `logits[b, t, v]` is the score for token `v` following the sequence through position `t` in batch item `b`.
 
 ### 4. Update parameters from the loss
 
-When targets are provided, `GPT.forward()` also computes cross entropy over all positions. The training loop differentiates this scalar loss and lets AdamW update the parameters.
+When `targets` are provided, `GPT.forward()` also computes cross entropy between the predicted probability distribution at each position and the correct token. The training loop computes gradients from this scalar loss and updates the parameters with AdamW (an optimization method that adaptively adjusts update sizes based on gradients).
 
 ```python
 optimizer.zero_grad(set_to_none=True)
@@ -145,17 +148,17 @@ loss.backward()
 optimizer.step()
 ```
 
-The real `train.py` adds gradient accumulation, a `GradScaler` for mixed precision, gradient clipping, a learning-rate schedule, and DDP gradient synchronization around this core. Most of that complexity exists to run larger training jobs efficiently and reliably; it does not change the meaning of the model itself.
+The real `train.py` adds gradient accumulation, a `GradScaler` for mixed precision, gradient clipping, a learning-rate schedule, and DDP gradient synchronization around this core. These operations help run larger training jobs efficiently and reliably; later chapters examine them in detail.
 
 ### 5. Save checkpoints and generate
 
-At regular intervals, training estimates train and validation loss and saves model parameters, optimizer state, the iteration number, and configuration in a checkpoint. `sample.py` restores a checkpoint and calls `model.generate()`. The loop that extends the sequence one token at a time lives inside `generate()`.
+At regular intervals, training estimates train and validation loss and saves model parameters, optimizer state, the iteration number, and configuration in a checkpoint. `sample.py` restores a checkpoint and calls `model.generate()`.
 
-Generation has no target `y`. It scales the logits from the final position by temperature, optionally removes everything outside the top-k candidates, applies softmax, and samples one next token. That token is appended to the input and the process repeats.
+Generation predicts a continuation from the tokens available so far. It scales the logits from the final position by temperature, optionally restricts the candidates to the top-k, applies softmax, and samples one next token. That token is appended to the input and the process repeats.
 
 ## Inside `model.py`
 
-`model.py` defines `LayerNorm`, `CausalSelfAttention`, `MLP`, `Block`, and `GPT`, moving from small modules to the complete model. At runtime they are nested like this:
+[`model.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py) defines `LayerNorm`, `CausalSelfAttention`, `MLP`, `Block`, and `GPT`, moving from small modules to the complete model. At runtime they are nested like this:
 
 ```text
 GPT
@@ -172,7 +175,7 @@ GPT
 └── language-model head           C → V
 ```
 
-Here $C$ is the embedding dimension. The central shapes move through the model as follows:
+Here $C$ is the embedding dimension (`n_embd`), and $H$ is the number of attention heads (`n_head`). Each head has dimension $d_{\text{head}} = C/H$, so $C$ must be divisible by $H$. The central shapes move through the model as follows:
 
 | Stage               | Shape                            | Meaning                                         |
 | ------------------- | -------------------------------- | ----------------------------------------------- |
@@ -186,30 +189,42 @@ Here $C$ is the embedding dimension. The central shapes move through the model a
 
 ### Causal self-attention
 
-[`CausalSelfAttention`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L29-L76) projects its input into queries, keys, and values, then separates them into multiple heads. One head approximately computes:
+The input to [`CausalSelfAttention`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L29-L76) is a multidimensional array of shape $B \times T \times C$, representing each token position with a $C$-dimensional vector. The first Transformer block uses representations formed by adding token and position embeddings; subsequent blocks use the previous block's output. Each block applies LayerNorm to normalize the mean and variance of each token position’s vector before passing the representations to `CausalSelfAttention`.
+
+Attention determines how much information each token position takes from itself and preceding positions, then gathers that information according to the weights. **Multi-head attention runs several such computations in parallel, each called a head**. Each head learns its own criteria for weighting positions and its own representations of the information to gather, allowing different heads to capture different relationships and features from the same input.
+
+Each head maps the input’s $C$-dimensional vector to query, key, and value vectors, each with $d_{\text{head}} = C/H$ dimensions. Queries and keys determine the attention weights between positions; values represent the information gathered according to those weights. The implementation combines the linear transformations for all $H$ heads: it transforms each token’s $C$-dimensional vector into $3C$ dimensions, splits it into three $C$-dimensional parts for queries, keys, and values, then splits each part into $H$ heads. Each resulting array has shape $B \times H \times T \times d_{\text{head}}$.
+
+For one head of one sample, queries, keys, and values are two-dimensional arrays $Q$, $K$, and $V$, each of shape $T \times d_{\text{head}}$. The attention weights $A$ and output $Y$ are computed as follows:
 
 $$
 A = \operatorname{softmax}\left(\frac{QK^\top}{\sqrt{d_{\text{head}}}} + M\right),
 \qquad Y = AV
 $$
 
-$M$ is a causal mask. It assigns $-\infty$ to future positions, making their weights zero after softmax. A prediction at position $t$ can therefore use positions $0$ through $t$, but it cannot see the future token that serves as its target.
+$M$ is a causal mask. It assigns $-\infty$ to future positions, making their weights zero after softmax. This restricts a prediction at position $t$ to information from positions $0$ through $t$.
 
-When PyTorch supports it, nanoGPT uses the fused `scaled_dot_product_attention` implementation. Otherwise it explicitly computes the mask, softmax, and value product in Python. The meaning is the same, although the explicit path is easier to inspect.
+When PyTorch supports it, nanoGPT uses the fused `scaled_dot_product_attention` implementation. Otherwise it explicitly computes the mask, softmax, and value product in Python. The computation has the same meaning, although the explicit path makes intermediate multidimensional arrays easier to inspect.
 
 ### The MLP and residual stream
 
-Attention mixes information across token positions. The [`MLP`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L78-L92) instead transforms the channels at each position. It expands the dimension from $C$ to $4C$, applies GELU, then projects back to $C$.
+Attention mixes information across token positions, while the [`MLP`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L78-L92) transforms each token position’s vector individually. A linear transformation expands the vector from $C$ to $4C$ dimensions, the nonlinear activation function GELU is applied, and another linear transformation returns it to $C$ dimensions. Combining the vector’s components (channels) this way allows it to represent more complex features. The MLP applies the same transformation at every position without mixing information between positions.
 
-[`Block`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L94-L106) adds the outputs of attention and the MLP back to the original `x`. These residual connections keep the shape at $B \times T \times C$ through every block. Later chapters will follow how the values inside that same-shaped container change from layer to layer.
+[`Block`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L94-L106) processes the representations through attention and then an MLP, applying LayerNorm before each operation and adding each output back to that operation’s input. This mechanism is called a residual connection. It provides a direct path for the original information to bypass each operation, making deep networks easier to train.
+
+Both attention and the MLP output $C$-dimensional vectors, so `x` retains the shape $B \times T \times C$ after each addition. The `x` that is updated through these blocks is called the residual stream. This series follows how its values change across layers while its shape stays the same.
 
 ### Returning to logits
 
-After all blocks, a final LayerNorm is followed by `lm_head`, which converts each $C$-dimensional hidden state into $V$ logits. The token embedding and `lm_head` share their weights. The same table that turns token IDs into input vectors is reused to score tokens at the output.
+After all Transformer blocks, a final LayerNorm is applied to the $C$-dimensional vector (hidden state) at each token position. Then `lm_head` computes a next-token score for each of the $V$ tokens in the vocabulary. These $V$-dimensional scores are called logits; applying softmax converts them into probabilities for each token appearing next.
+
+`lm_head` and the token embedding share the same weights. The table used to retrieve a $C$-dimensional vector for each input token ID is reused at the output to compute scores as dot products between the hidden state and each token’s vector.
+
+During training, logits are computed for all positions, giving an output shape of $B \times T \times V$. During text generation, the logits at the final position are used to select the next token.
 
 ## Reading `train.py` by responsibility
 
-`train.py` looks long, but it becomes manageable when divided into six sections:
+[`train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py) looks long, but it becomes manageable when divided into six sections:
 
 1. **Default configuration** — dataset, model size, optimizer, evaluation cadence, and device.
 2. **Runtime setup** — single-process or DDP execution, random seeds, device, dtype, and autocast.
@@ -232,7 +247,7 @@ These paths start with different weights but eventually join the same `GPT` inst
 
 nanoGPT starts from defaults in `train.py` and overrides architecture and training settings through `config/*.py` and `--key=value`. [`configurator.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/configurator.py#L20-L47) is small, but it is important for experiment reproducibility.
 
-The upstream defaults and the character-level Shakespeare configuration operate at very different scales:
+The source repository’s defaults and the character-level Shakespeare configuration operate at very different scales:
 
 | Setting             | `train.py` default | Shakespeare character config |
 | ------------------- | -----------------: | ---------------------------: |
@@ -242,7 +257,7 @@ The upstream defaults and the character-level Shakespeare configuration operate 
 | Embedding dimension |                768 |                          384 |
 | Dataset             |        OpenWebText |             Tiny Shakespeare |
 
-Model size is not the only relevant condition. Batch size, learning rate, iteration count, dropout, evaluation count, and device all change the result and runtime. Running “the same code” is not enough to reproduce an experiment; the configuration and source commit must be recorded too.
+Model size, batch size, learning rate, iteration count, dropout, evaluation count, and device all affect the result and runtime. Record the configuration and source commit so the experiment can be reproduced.
 
 ## Where training and generation diverge
 
@@ -256,11 +271,11 @@ Training and generation share the same model from token IDs through hidden state
 | Parameters         | Updated through gradients               | Held fixed                               |
 | Unit of repetition | One batch                               | One generated token                      |
 
-This makes it clear that `train.py` and `sample.py` do not use separate models. They call the same `GPT.forward()` for different purposes.
+`train.py` and `sample.py` call the same `GPT.forward()` for training and generation, respectively.
 
 ## A recommended source-reading order
 
-For a first pass, follow values in this order instead of reading every file from the top:
+For a first pass, follow the data values and computations in this order to see how the steps connect:
 
 1. Open [`data/shakespeare_char/prepare.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data/shakespeare_char/prepare.py) and connect text to token IDs.
 2. Inspect [`train.py:get_batch()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L114-L131) and verify that `X` and `Y` differ by one token.
@@ -281,29 +296,14 @@ Chapters 1–2 turn text into token IDs and build context windows and targets fr
 
 ### Phase 2 — Decompose the forward pass
 
-Chapters 3–8 split `GPT.forward()` into embeddings, positions, self-attention, multiple heads, the MLP, the residual stream, logits, and loss. At each stage we will inspect not only tensor shapes but also value ranges and the meaning of each axis.
+Chapters 3–8 split `GPT.forward()` into embeddings, positions, self-attention, multi-head attention, the MLP, the residual stream, logits, and loss. At each stage we will visualize multidimensional array shapes, value ranges, and the meaning of each axis.
 
 ### Phase 3 — Watch the model learn
 
-Chapters 9–11 follow gradients from the loss, inspect how the optimizer updates parameters, and interpret train and validation loss. The phase ends by training a small GPT and comparing its output before and after training.
+Chapters 9–11 follow gradients from the loss, inspect how the optimizer updates parameters, and interpret train and validation loss. The phase ends by training a small-scale GPT and comparing its output before and after training.
 
 ### Phase 4 — Move to scale and a wider system
 
 Chapter 12 experiments with tradeoffs among parameter count, context length, batch size, and compute. Chapter 13 starts from the pretraining core learned in nanoGPT and examines the additional data, evaluation, inference, and chat-oriented stages introduced by nanochat.
 
 <ChapterList lang="en" compact />
-
-## Data and model computation
-
-nanoGPT becomes easier to navigate when remembered as two connected paths:
-
-```text
-data path:
-text → prepare.py → train.bin → get_batch → X / Y
-
-model path:
-X → GPT.forward → logits → loss → backward → optimizer → checkpoint
-                                            checkpoint → generate → text
-```
-
-As later chapters zoom into individual equations and modules, we can identify where each one fits in the overall computation. The goal is not to memorize filenames. It is to explain **where a token ID becomes a vector, where it receives context, where it becomes next-token scores, and where those scores lead to parameter updates**.

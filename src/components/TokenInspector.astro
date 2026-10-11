@@ -1,0 +1,146 @@
+---
+import example from '../../public/site/data/nanogpt/shakespeare-tokenizer.json';
+import type { Language } from '../lib/site';
+import { tokenizationUi } from '../lib/tokenization-i18n';
+
+interface Props {
+  lang: Language;
+}
+
+const { lang } = Astro.props;
+const t = tokenizationUi[lang];
+const inputId = `token-input-${lang}`;
+const hintId = `token-hint-${lang}`;
+---
+
+<figure
+  class="token-inspector"
+  data-token-inspector
+  data-vocabulary={JSON.stringify(example.vocabulary)}
+  data-sample={example.sample}
+  data-labels={JSON.stringify(t)}
+>
+  <label for={inputId}>{t.input}</label>
+  <textarea
+    id={inputId}
+    aria-describedby={hintId}
+    rows="3"
+    maxlength="500"
+    spellcheck="false"
+    autocomplete="off"
+    disabled
+  >{example.sample}</textarea>
+  <p id={hintId} class="hint">
+    {t.hint}
+  </p>
+  <button type="button" disabled>
+    {t.reset}
+  </button>
+  <div aria-live="polite" aria-atomic="true">
+    <p data-message>
+      {t.count}: {example.ids.length}
+    </p>
+    <p>{t.sequence}</p>
+    <output for={inputId}>{JSON.stringify(example.ids)}</output>
+  </div>
+  <noscript>
+    <p>{t.noScript}</p>
+  </noscript>
+</figure>
+
+<script>
+  import type { tokenizationUi } from '../lib/tokenization-i18n';
+
+  document
+    .querySelectorAll<HTMLElement>('[data-token-inspector]')
+    .forEach((root) => {
+      const vocabulary: string[] = JSON.parse(root.dataset.vocabulary!);
+      const labels: (typeof tokenizationUi)['ja' | 'en'] = JSON.parse(
+        root.dataset.labels!,
+      );
+      const mapping = new Map(vocabulary.map((char, id) => [char, id]));
+      const input = root.querySelector('textarea')!;
+      const button = root.querySelector('button')!;
+      const message = root.querySelector<HTMLElement>('[data-message]')!;
+      const output = root.querySelector('output')!;
+
+      function update() {
+        const chars = Array.from(input.value);
+        const unknown = [
+          ...new Set(chars.filter((char) => !mapping.has(char))),
+        ];
+        input.setAttribute('aria-invalid', String(unknown.length > 0));
+        if (unknown.length) {
+          message.textContent = `${labels.unknown} ${unknown.map((char) => JSON.stringify(char)).join(', ')}`;
+          output.textContent = labels.unavailable;
+          return;
+        }
+
+        const ids = chars.map((char) => mapping.get(char)!);
+        message.textContent = ids.length
+          ? `${labels.count}: ${ids.length}`
+          : labels.empty;
+        output.textContent = JSON.stringify(ids);
+      }
+
+      input.disabled = false;
+      button.disabled = false;
+      input.addEventListener('input', update);
+      button.addEventListener('click', () => {
+        input.value = root.dataset.sample!;
+        update();
+      });
+    });
+</script>
+
+<style>
+  .token-inspector {
+    border-block: 1px solid var(--line-strong);
+    margin: 2rem 0;
+    padding: 1.25rem 0;
+  }
+
+  .token-inspector p {
+    margin: 1rem 0 0.5rem;
+    font-size: 0.85rem;
+  }
+
+  label {
+    display: block;
+    font-weight: 600;
+    font-size: 0.85rem;
+  }
+
+  textarea {
+    width: 100%;
+    padding: 0.7rem;
+    border: 1px solid var(--line-strong);
+    background: var(--paper);
+    color: var(--ink);
+    font: 1rem / 1.6 var(--font-mono);
+    resize: vertical;
+  }
+
+  textarea:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  button {
+    background: var(--paper-subtle);
+    border: 1px solid var(--line-strong);
+    color: var(--ink);
+    padding: 0.45rem 0.75rem;
+    font: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+
+  output {
+    display: block;
+    font-family: var(--font-mono);
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    font-size: 0.85rem;
+  }
+</style>

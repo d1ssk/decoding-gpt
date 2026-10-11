@@ -16,7 +16,7 @@ The site will begin with **nanoGPT** and later expand to **nanochat**.
 ## Core principles
 
 * Prefer understanding through **code + experiment + visualization**, not prose alone.
-* Explain concepts by following actual tensors, computations, training behavior, and model outputs.
+* Explain concepts by following actual multidimensional arrays, computations, training behavior, and model outputs.
 * Keep conceptual diagrams, real-model visualizations, and experiment results clearly distinguished.
 * Articles should be readable sequentially but also useful independently.
 * Do not turn articles into line-by-line source-code commentary. Organize around questions and concepts.
@@ -32,6 +32,14 @@ The site is bilingual:
 Japanese and English pages should have equivalent structure and content.
 
 Do not mix UI-language strings directly into components when they should be localized.
+
+Use 「多次元配列」 in Japanese explanations and “multidimensional array” in English explanations for model data arrays, rather than 「テンソル」 or “tensor.” Follow this terminology in articles and conversational explanations. Preserve literal API/type names and source code such as `torch.Tensor` when referring to the implementation.
+
+Likewise, describe model data as 「配列」 / “arrays” rather than 「行列」 / “matrices”; use 「2 次元配列」 / “two-dimensional arrays” when dimensionality matters. Apply this convention in articles and conversational explanations while preserving literal API/type names and source code.
+
+In Japanese body text, insert a half-width space between English expressions and Japanese text, including around inline code and linked English terms.
+
+Prefer direct, affirmative explanations in both languages. Avoid unnecessary negative contrasts such as 「〜ではない」「〜ではありません」 or “not X, but Y”; retain negation when needed for accurate constraints or errors.
 
 ## Technical direction
 
@@ -58,7 +66,7 @@ Article pages should generally support this conceptual flow when appropriate:
 1. Question / goal
 2. Where this appears in the source
 3. Concept
-4. Tensor shapes / computation
+4. Multidimensional array shapes / computation
 5. Run an experiment
 6. Visualize the result
 7. Observations
@@ -104,16 +112,18 @@ public/data/
 
 A visualization should preferably consume reproducible generated data rather than contain unexplained hard-coded results.
 
-## Upstream source references
+Use 「参照元リポジトリ」 in Japanese prose and “source repository” in English prose instead of “upstream.” Existing internal metadata keys such as `upstream` may remain unchanged.
 
-nanoGPT and nanochat are external upstream projects.
+## Source repository references
 
-When articles depend on upstream source code:
+nanoGPT and nanochat are external source repositories.
+
+When articles depend on code from a source repository:
 
 * record the repository and commit hash
 * refer to specific files/functions where useful
-* do not silently assume current upstream `master`
-* do not copy large portions of upstream source into this repository
+* do not silently assume the source repository’s current `master`
+* do not copy large portions of code from a source repository into this repository
 
 Short excerpts used for explanation are acceptable when necessary.
 

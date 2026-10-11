@@ -1,0 +1,205 @@
+---
+title: 'Text and Tokens'
+description: 'Build a character tokenizer and inspect its vocabulary, token IDs, decoding, and stored training data.'
+order: 1
+series: nanogpt
+lang: en
+translationKey: nanogpt-01-text-to-tokens
+slug: 01-text-to-tokens
+draft: false
+upstream:
+  repository: karpathy/nanoGPT
+  commit: 3adf61e154c3fe3fca428ad6bc3818b27a3b8291
+  sourceFiles:
+    - data/shakespeare_char/prepare.py
+    - data/shakespeare/prepare.py
+    - train.py
+    - sample.py
+    - model.py
+experimentId: nanogpt-01-text-to-tokens
+---
+
+import TokenInspector from '../../../../components/TokenInspector.astro';
+
+When you enter `hello` into GPT, the text is converted to a sequence of integers and passed to the model. This chapter follows nanoGPT's data preparation to see how text is divided into units and how those units receive IDs.
+
+## What does a token represent?
+
+**A token is a unit that a model uses for input and prediction.** Depending on the tokenizer's rules, a token can represent a character, part of a word, a whole word, or another grouping.
+
+The set of available tokens is the **vocabulary**, and the integer assigned to each entry is its **token ID**. Encoding divides text into tokens and converts them to IDs; decoding converts the IDs back to text. A tokenizer performs these conversions.
+
+We will start with **one character per token**. We build a character mapping and replace each input character with its assigned number. This lets us inspect the correspondence one character at a time.
+
+## Where to look in nanoGPT
+
+| File                                                                                                                                                     | What to inspect                                                                  |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| [`data/shakespeare_char/prepare.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data/shakespeare_char/prepare.py) | Build a character vocabulary, convert using `stoi` / `itos`, and save the result |
+| [`data/shakespeare/prepare.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data/shakespeare/prepare.py)           | Encode the same source material with GPT-2 BPE                                   |
+| [`train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py)                                                 | Read saved IDs in `get_batch()`                                                  |
+| [`sample.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/sample.py)                                               | Convert between text and IDs during generation                                   |
+
+The character preparation script collects unique characters from the text and sorts them to build the vocabulary. `stoi` maps characters to integers; `itos` maps integers to characters. Together, they define the encoding and decoding correspondence.
+
+## Run the conversion on a small input
+
+The following code builds a vocabulary from twelve characters—`hello` followed by a newline, repeated twice—then converts a string to IDs and decodes them back to the original string. This example illustrates nanoGPT's preparation logic with a small input.
+
+```python
+corpus = "hello\nhello\n"
+vocabulary = sorted(set(corpus))
+stoi = {char: index for index, char in enumerate(vocabulary)}
+itos = dict(enumerate(vocabulary))
+
+def encode(text):
+    return [stoi[char] for char in text]
+
+def decode(ids):
+    return "".join(itos[index] for index in ids)
+
+sample = "hello\n"
+ids = encode(sample)
+print(vocabulary)
+print(ids)
+print(repr(decode(ids)))
+assert decode(ids) == sample
+```
+
+Running it produces the following output. `\n` represents one newline character. `repr()` makes that newline visible in the printed representation.
+
+```text
+['\n', 'e', 'h', 'l', 'o']
+[2, 1, 3, 3, 4, 0]
+'hello\n'
+```
+
+Let $V$ denote vocabulary size. Here $V = 5$, and IDs satisfy $0 \leq \mathrm{ID} < V$. The six characters in `hello\n` produce six integers. Vocabulary size counts distinct characters; token count counts characters in the input.
+
+Sorting happens **only when building the vocabulary**. Encoding preserves input order, converting `h` → `e` → `l` → `l` → `o` to IDs in that sequence.
+
+## Encode with the Shakespeare vocabulary
+
+The input below uses the 65-character vocabulary built from the full Tiny Shakespeare text with the same procedure as `data/shakespeare_char/prepare.py`. Each character is converted to the ID used in the training data as you type. Uppercase and lowercase letters have separate IDs; spaces and newlines also have IDs.
+
+<TokenInspector lang="en" />
+
+## An ID selects an entry in a mapping
+
+In the earlier Python example, numbering the sorted vocabulary assigns ID `2` to `h` and ID `4` to `o`. Each ID uniquely identifies its character. The character features learned by the model are represented in the embedding vector associated with that ID.
+
+[`GPT.forward()` in `model.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py) passes input IDs to `self.transformer.wte(idx)`. Each ID selects a row of the embedding table and retrieves its vector. Training updates the values in that vector. Chapter 3 will examine the vectors.
+
+## Save IDs as training data
+
+`prepare.py` builds the vocabulary from the whole text, then keeps the original order and uses roughly the first 90% for training and the rest for validation. Each part is encoded and saved separately.
+
+The following code splits the earlier `corpus` into training and validation portions, then converts each to IDs using `encode()`.
+
+```python
+split = int(len(corpus) * 0.9)
+train_ids = encode(corpus[:split])
+val_ids = encode(corpus[split:])
+print(split)
+print(train_ids)
+print(val_ids)
+assert decode(train_ids + val_ids) == corpus
+```
+
+```text
+10
+[2, 1, 3, 3, 4, 0, 2, 1, 3, 3]
+[4, 0]
+```
+
+Ninety percent of twelve is 10.8, so `int()` places the boundary at ten. Splitting by character count cuts through the second `hello`. This tiny input lets us check the conversion and splitting procedure. Evaluating model performance requires a separate validation dataset with sufficient size and variety.
+
+### Prepare data in the source repository
+
+Running `python3 data/shakespeare_char/prepare.py` from the nanoGPT root directory produces training and validation ID sequences from Tiny Shakespeare.
+
+The script downloads the text if `data/shakespeare_char/input.txt` is absent; otherwise, it reads the existing file. It builds the 65-character vocabulary and `stoi` / `itos` from the whole text, then encodes the first roughly 90% for training and the rest for validation.
+
+All files reside in `data/shakespeare_char/`. The contents and sizes below correspond to the [Tiny Shakespeare text](https://github.com/karpathy/char-rnn/blob/6f9487a6fe5b420b7ca9afb0d7c078e37c1d1b4e/data/tinyshakespeare/input.txt).
+
+<div className="data-files-table">
+
+| File        | Content                                                          | Size                                                                |
+| ----------- | ---------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `input.txt` | Original text, 1,115,394 characters                              | 1,115,394 bytes (about 1.12 MB)                                     |
+| `train.bin` | First 1,003,854 tokens as `uint16`                               | 2,007,708 bytes (about 2.01 MB)                                     |
+| `val.bin`   | Remaining 111,540 tokens as `uint16`                             | 223,080 bytes (about 223 KB)                                        |
+| `meta.pkl`  | Vocabulary size `65` and `stoi` / `itos`, serialized with pickle | About 0.7 KB (varies with Python version and serialization details) |
+
+</div>
+
+Each `uint16` occupies two bytes, so each `.bin` file's size is twice its token count. Every character in this corpus occupies one UTF-8 byte, making the combined binary files twice the size of `input.txt`.
+
+The `.bin` files store the IDs. Readers specify `uint16` and obtain the character mapping from `meta.pkl`. Running `prepare.py` again overwrites these three output files.
+
+During training, `train.py` reads the data using `np.memmap(..., dtype=np.uint16)`, slices the needed sections, and converts them to `int64` multidimensional arrays. When generating with a character model, `sample.py` reads `meta.pkl` to encode the prompt and decode generated IDs using the same mapping.
+
+## What changes with GPT-2 BPE?
+
+With character tokenization, even English words are converted to IDs one character at a time. GPT-2 uses BPE (byte pair encoding), which can group several characters into one token. For example, `Tokenization is useful.` is split as follows:
+
+```text
+Characters: [T][o][k][e][n][i][z][a][t][i][o][n][ ][i][s][ ][u][s][e][f][u][l][.]
+GPT-2:      [Token][ization][ is][ useful][.]
+```
+
+Character tokenization produces 23 tokens, including spaces and punctuation; GPT-2 produces five. `Tokenization` splits within the word, while ` is` and ` useful` each include a leading space. Tokens can have different lengths, representing whole words or parts of words.
+
+### How are token groups chosen?
+
+When building a BPE vocabulary, frequently occurring pairs of adjacent units in training text are repeatedly merged into new units. A merged unit can participate in another merge, creating longer groups. The resulting vocabulary and merge priorities are then used to encode input.
+
+GPT-2 starts from individual UTF-8 bytes. Each English letter occupies one byte, so the example above can be understood as merging units that initially correspond to characters. Characters in languages such as Japanese can occupy several bytes and may span multiple tokens. Including every byte value in the base vocabulary lets the tokenizer represent unfamiliar words through their bytes.
+
+During encoding, rules first separate the text into pieces such as runs of letters, numbers, and punctuation. Within each piece, adjacent units are merged according to the stored priorities until no applicable merges remain. The remaining groups are the tokens. GPT-2's vocabulary and merge rules were prepared in advance; nanoGPT loads and uses them. The [educational BPE implementation in tiktoken](https://github.com/openai/tiktoken/blob/0.9.0/tiktoken/_educational.py) also shows this process.
+
+### Convert the tokens to IDs
+
+The following code encodes the sentence with GPT-2's tokenizer, then displays the text corresponding to each ID and the reconstructed sentence.
+
+```python
+import tiktoken
+
+enc = tiktoken.get_encoding("gpt2")
+text = "Tokenization is useful."
+ids = enc.encode_ordinary(text)
+print(ids)
+print([enc.decode([token_id]) for token_id in ids])
+print(enc.decode(ids))
+```
+
+```text
+[30642, 1634, 318, 4465, 13]
+['Token', 'ization', ' is', ' useful', '.']
+Tokenization is useful.
+```
+
+ID `30642` corresponds to `Token`, and ID `1634` to `ization`. As with character tokenization, an ID identifies a vocabulary entry. With GPT-2, that entry can contain several characters.
+
+### What changes in nanoGPT's data preparation?
+
+nanoGPT's [`data/shakespeare/prepare.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data/shakespeare/prepare.py) uses the same `get_encoding("gpt2")` and `encode_ordinary()` calls to convert Tiny Shakespeare. Compared with `data/shakespeare_char/prepare.py`, the differences are:
+
+|                        | Character tokenization                   | GPT-2 BPE                                        |
+| ---------------------- | ---------------------------------------- | ------------------------------------------------ |
+| Vocabulary preparation | Collect characters from Tiny Shakespeare | Load GPT-2's existing vocabulary and merge rules |
+| Vocabulary size        | 65                                       | 50,257 (including one special token)             |
+| Training tokens        | 1,003,854                                | 301,966                                          |
+| Validation tokens      | 111,540                                  | 36,059                                           |
+
+Even with the same text and training/validation boundary, changing the token units changes the token count. For this corpus, BPE produces about 30% as many training tokens as character tokenization. A larger vocabulary with longer groups can represent the same text with a shorter ID sequence.
+
+Both methods ultimately supply integer IDs, so nanoGPT can train with either method using the same model architecture. When training from scratch, the vocabulary size is configured for the chosen tokenizer. Changing this size changes the number of embedding entries and the number of output values used to predict the next ID.
+
+Character tokenization saves files in `data/shakespeare_char/`, while GPT-2 BPE uses `data/shakespeare/`. Both use the same formats for `train.bin` and `val.bin`. Character tokenization saves the vocabulary and ID mappings built from the text in `meta.pkl`; GPT-2 BPE loads its existing mapping through `tiktoken`, so it does not generate `meta.pkl`.
+
+## In the next chapter
+
+We now have vocabulary size $V$ and a one-dimensional sequence of integers, each at least $0$ and less than $V$. Recovering the text requires the same mapping used to encode it. This sequence becomes the input to embedding and token prediction computations.
+
+The next chapter will examine how to take a length-$T$ slice from a long ID sequence and pair it with targets shifted one token ahead. Grouping $B$ such pairs produces input and target multidimensional arrays of shape $B \times T$.

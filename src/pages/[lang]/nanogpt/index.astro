@@ -12,12 +12,11 @@ export function getStaticPaths() {
 const lang = Astro.params.lang as Language;
 const otherLang: Language = lang === 'ja' ? 'en' : 'ja';
 const t = useTranslations(lang);
-const title = `${t.nanoGptTitleStart}${t.nanoGptTitleEnd}`;
 ---
 
 <BaseLayout
   {lang}
-  {title}
+  title="nanoGPT"
   description={t.nanoGptLead}
   canonicalPath={`${lang}/nanogpt/`}
   alternateHref={localizedPath(otherLang, 'nanogpt/')}
@@ -25,10 +24,7 @@ const title = `${t.nanoGptTitleStart}${t.nanoGptTitleEnd}`;
   <div class="section-page">
     <header>
       <p class="eyebrow">Part 01 / nanoGPT</p>
-      <h1>
-        <span>{t.nanoGptTitleStart}</span>
-        <span>{t.nanoGptTitleEnd}</span>
-      </h1>
+      <h1>nanoGPT</h1>
       <p class="lead">{t.nanoGptLead}</p>
       <a class="start-link" href={localizedPath(lang, 'nanogpt/00-overview/')}>
         {t.readOverview} <span aria-hidden="true">→</span>
@@ -60,28 +56,18 @@ const title = `${t.nanoGptTitleStart}${t.nanoGptTitleEnd}`;
   }
 
   h1 {
-    display: flex;
-    flex-wrap: wrap;
     font-family: var(--font-display);
-    font-size: clamp(2.5rem, 7vw, 5.5rem);
+    font-size: var(--page-title-size);
     font-weight: 500;
     letter-spacing: -0.055em;
-    line-height: 1.15;
+    line-height: 1.25;
     margin: 1rem 0 1.5rem;
-  }
-
-  h1 span {
-    white-space: nowrap;
   }
 
   h1:lang(ja) {
     font-family:
       'Hiragino Sans', 'Noto Sans JP', 'Yu Gothic', 'Hiragino Kaku Gothic ProN',
       Meiryo, sans-serif;
-  }
-
-  h1:lang(en) {
-    column-gap: 0.2em;
   }
 
   .lead {

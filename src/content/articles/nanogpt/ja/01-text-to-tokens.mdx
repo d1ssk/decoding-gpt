@@ -1,0 +1,205 @@
+---
+title: 'テキストとトークン'
+description: '文字単位の tokenizer を作り、語彙表、token ID、復元、学習用データの保存までを確かめる。'
+order: 1
+series: nanogpt
+lang: ja
+translationKey: nanogpt-01-text-to-tokens
+slug: 01-text-to-tokens
+draft: false
+upstream:
+  repository: karpathy/nanoGPT
+  commit: 3adf61e154c3fe3fca428ad6bc3818b27a3b8291
+  sourceFiles:
+    - data/shakespeare_char/prepare.py
+    - data/shakespeare/prepare.py
+    - train.py
+    - sample.py
+    - model.py
+experimentId: nanogpt-01-text-to-tokens
+---
+
+import TokenInspector from '../../../../components/TokenInspector.astro';
+
+GPT に `hello` と入力するとき、文字列は整数の列に変換されてモデルへ渡ります。この章では、文字列をどの単位に分け、その単位にどう番号を割り当てるのかを、nanoGPT のデータ準備から追います。
+
+## トークンは何を表すのか
+
+**トークンは、モデルが入力と予測に使う単位です。** 1文字、単語の一部、単語全体など、tokenizer の規則に応じてさまざまなまとまりが1トークンになります。
+
+使えるトークンの集合を**語彙**、その各要素に割り当てた整数を **token ID** と呼びます。テキストをトークンに分けて ID 列に変換する処理が encode、その ID 列を文字列に戻す処理が decode です。この変換を担当するのが tokenizer です。
+
+ここでは、最初に **1文字 = 1トークン**とする方式を使います。文字ごとの対応表を作り、入力の各文字を表にある番号へ置き換えます。入力と ID の対応を一つずつ確認できる方法です。
+
+## nanoGPT のどこを読むか
+
+| ファイル                                                                                                                                                 | 確認する処理                                               |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| [`data/shakespeare_char/prepare.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data/shakespeare_char/prepare.py) | 文字から語彙を作り、`stoi` / `itos` で相互変換して保存する |
+| [`data/shakespeare/prepare.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data/shakespeare/prepare.py)           | 同じ題材を GPT-2 の BPE で変換する                         |
+| [`train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py)                                                 | 保存された ID 列を `get_batch()` で読み込む                |
+| [`sample.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/sample.py)                                               | 生成時に文字列と ID 列を相互変換する                       |
+
+文字単位の準備では、テキストに現れる文字の重複を取り除き、ソートして語彙を作ります。`stoi` は文字から整数への辞書、`itos` は整数から文字への辞書です。この2つが encode / decode の対応関係を決めます。
+
+## 小さな入力で変換を実行する
+
+以下のコードでは、`hello` と改行を2回繰り返した12文字から語彙を作り、文字列を ID 列に変換してから元の文字列に復元します。nanoGPT の準備処理を小さな入力で確かめる例です。
+
+```python
+corpus = "hello\nhello\n"
+vocabulary = sorted(set(corpus))
+stoi = {char: index for index, char in enumerate(vocabulary)}
+itos = dict(enumerate(vocabulary))
+
+def encode(text):
+    return [stoi[char] for char in text]
+
+def decode(ids):
+    return "".join(itos[index] for index in ids)
+
+sample = "hello\n"
+ids = encode(sample)
+print(vocabulary)
+print(ids)
+print(repr(decode(ids)))
+assert decode(ids) == sample
+```
+
+実行結果は次のとおりです。`\n` は1つの改行文字を表します。`repr()` は、その改行を見える表記にするために使っています。
+
+```text
+['\n', 'e', 'h', 'l', 'o']
+[2, 1, 3, 3, 4, 0]
+'hello\n'
+```
+
+語彙の大きさを $V$ とすると、この例では $V = 5$ で、ID の範囲は $0 \leq \mathrm{ID} < V$ です。`hello\n` は6文字なので、変換結果は長さ6の整数列になります。語彙サイズは文字の種類数、トークン数は入力中の文字数です。
+
+ソートするのは**語彙を作るときだけ**です。encode では `h` → `e` → `l` → `l` → `o` のように、入力の順序を保って ID に変換します。
+
+## Shakespeare の語彙で変換する
+
+次の入力欄では、`data/shakespeare_char/prepare.py` と同じ手順で Tiny Shakespeare の全文から作った65文字の語彙を使います。入力すると、各文字が学習データと同じ ID に変換されます。大文字と小文字には、それぞれ別の ID が付き、空白や改行にも ID が付きます。
+
+<TokenInspector lang="ja" />
+
+## ID は対応表の項目を指定する番号
+
+先ほどの Python の例では、ソートした語彙の順に番号を振るため、`h` の ID は `2`、`o` の ID は `4` になります。ID の役割は、対応する文字を一意に指定することです。モデルが学習する文字の特徴は、各 ID に対応する embedding のベクトルに表れます。
+
+[`model.py` の `GPT.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py) は、入力 ID を `self.transformer.wte(idx)` に渡します。ここで ID が embedding の表の行を選び、その行のベクトルを取り出します。学習ではこのベクトルの値を更新します。ベクトルの中身は第3章で扱います。
+
+## ID 列を学習用のファイルに保存する
+
+`prepare.py` は、テキスト全体から語彙を作った後、元の順序を保ったまま先頭約90%を学習用、残りを検証用に分けます。それぞれを ID 列に変換して保存します。
+
+以下のコードでは、先ほどの `corpus` を学習用と検証用に分割し、それぞれを `encode()` で ID 列に変換します。
+
+```python
+split = int(len(corpus) * 0.9)
+train_ids = encode(corpus[:split])
+val_ids = encode(corpus[split:])
+print(split)
+print(train_ids)
+print(val_ids)
+assert decode(train_ids + val_ids) == corpus
+```
+
+```text
+10
+[2, 1, 3, 3, 4, 0, 2, 1, 3, 3]
+[4, 0]
+```
+
+12文字の90%は10.8文字なので、`int()` によって境界は10になります。文字数で区切るため、ここでは2回目の `hello` の途中で切れています。この小さな入力で確認できるのは、文字の変換と分割の手順です。モデルの性能評価には、十分な量と多様性を持つ検証データを別途用意します。
+
+### 参照元リポジトリでのデータ準備
+
+nanoGPT のルートディレクトリで `python3 data/shakespeare_char/prepare.py` を実行すると、Tiny Shakespeare の本文から学習用・検証用の ID 列が作られます。
+
+`data/shakespeare_char/input.txt` がなければ本文をダウンロードし、すでにある場合はそのファイルを読み込みます。本文全体から65文字の語彙と `stoi` / `itos` を作り、先頭の約90%を学習用、残りを検証用に変換します。
+
+入力と出力は、すべて `data/shakespeare_char/` に置かれます。[Tiny Shakespeare の本文](https://github.com/karpathy/char-rnn/blob/6f9487a6fe5b420b7ca9afb0d7c078e37c1d1b4e/data/tinyshakespeare/input.txt) を使った場合の内容とサイズは次のとおりです。
+
+<div className="data-files-table">
+
+| ファイル    | 内容                                                    | サイズ                                           |
+| ----------- | ------------------------------------------------------- | ------------------------------------------------ |
+| `input.txt` | 元の本文、1,115,394 文字                                | 1,115,394 バイト（約 1.12 MB）                   |
+| `train.bin` | 先頭の 1,003,854 トークンを `uint16` で保存             | 2,007,708 バイト（約 2.01 MB）                   |
+| `val.bin`   | 残りの 111,540 トークンを `uint16` で保存               | 223,080 バイト（約 223 KB）                      |
+| `meta.pkl`  | 語彙サイズ `65` と `stoi` / `itos` を pickle 形式で保存 | 約 0.7 KB（Python のバージョンなどで変わります） |
+
+</div>
+
+`uint16` は1要素が2バイトの符号なし整数なので、各 `.bin` ファイルのサイズはトークン数の2倍です。この本文の文字は UTF-8 では1文字1バイトなので、変換後の `train.bin` と `val.bin` の合計は `input.txt` の2倍になります。
+
+`.bin` ファイルには ID 列が保存されます。読み込む側でデータ型を `uint16` と指定し、文字と ID の対応は `meta.pkl` から取得します。`prepare.py` を再実行すると、この3つの出力ファイルは上書きされます。
+
+学習時には `train.py` が `np.memmap(..., dtype=np.uint16)` で読み、必要な部分を切り出して `int64` の多次元配列に変換します。`sample.py` は文字単位モデルの生成時に `meta.pkl` を読み、同じ対応表を使って入力を encode し、生成された ID 列を decode します。
+
+## GPT-2 の BPE では何が違うか
+
+ここまでの文字単位の方式では、英語の単語も1文字ずつ ID に変換します。GPT-2 が使う BPE（byte pair encoding）では、複数の文字をまとめて1つのトークンにできます。たとえば `Tokenization is useful.` は、次のように分割されます。
+
+```text
+文字単位： [T][o][k][e][n][i][z][a][t][i][o][n][ ][i][s][ ][u][s][e][f][u][l][.]
+GPT-2：   [Token][ization][ is][ useful][.]
+```
+
+文字単位では空白や句読点も含めて23トークン、GPT-2 では5トークンです。`Tokenization` は単語の途中で分かれ、` is` や ` useful` は先頭の空白も含めて1トークンになっています。分割の単位には、単語全体や単語の一部など、さまざまな長さがあります。
+
+### どのまとまりを1トークンにするのか
+
+BPE は、語彙を作る段階で、学習用テキストに頻出する隣り合った2つの単位を結合し、新しい単位として追加する処理を繰り返します。結合でできた単位も次の結合の対象になるため、長いまとまりが作られます。こうして得た語彙と結合の優先順位を、入力の変換に使います。
+
+GPT-2 では、出発点の単位は UTF-8 の1バイトです。英字は1文字が1バイトなので、上の例では文字ごとの単位から結合する様子を考えられます。日本語などには1文字が複数バイトになるものもあり、その場合は1文字が複数トークンに分かれることもあります。すべてのバイト値を基本の語彙に含むため、初めて現れる単語も、そのバイト列から表現できます。
+
+実際の変換では、まず文字列を英字の並びや数字、句読点などの規則で区切り、その各部分の中で、登録された優先順位に従って隣り合う単位を結合します。適用できる結合がなくなった時点のまとまりがトークンになります。GPT-2 用の語彙と結合規則は事前に作られており、nanoGPT ではそれを読み込んで使います。処理の流れは [tiktoken の BPE 実装](https://github.com/openai/tiktoken/blob/0.9.0/tiktoken/_educational.py) でも確認できます。
+
+### 分割したトークンを ID に変換する
+
+以下のコードでは、GPT-2 の tokenizer で先ほどの文を ID 列に変換し、各 ID に対応する文字列と、復元した文を表示します。
+
+```python
+import tiktoken
+
+enc = tiktoken.get_encoding("gpt2")
+text = "Tokenization is useful."
+ids = enc.encode_ordinary(text)
+print(ids)
+print([enc.decode([token_id]) for token_id in ids])
+print(enc.decode(ids))
+```
+
+```text
+[30642, 1634, 318, 4465, 13]
+['Token', 'ization', ' is', ' useful', '.']
+Tokenization is useful.
+```
+
+たとえば ID `30642` は `Token`、ID `1634` は `ization` に対応します。文字単位の方式と同じく、ID は語彙の項目を指定する番号です。GPT-2 では、その項目が複数の文字を含むことがあります。
+
+### nanoGPT のデータ準備ではどう変わるか
+
+nanoGPT の [`data/shakespeare/prepare.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data/shakespeare/prepare.py) は、この `get_encoding("gpt2")` と `encode_ordinary()` を使って Tiny Shakespeare を変換します。先ほどの `data/shakespeare_char/prepare.py` との違いは、次のとおりです。
+
+|                    | 文字単位                              | GPT-2 の BPE                        |
+| ------------------ | ------------------------------------- | ----------------------------------- |
+| 語彙の用意         | Tiny Shakespeare に現れる文字から作る | 既存の GPT-2 の語彙と結合規則を使う |
+| 語彙サイズ         | 65                                    | 50,257（特殊トークン1個を含む）     |
+| 学習用のトークン数 | 1,003,854                             | 301,966                             |
+| 検証用のトークン数 | 111,540                               | 36,059                              |
+
+同じ本文を同じ位置で学習用と検証用に分けても、分割の単位が変わるとトークン数が変わります。この本文では、BPE の学習用トークン数は文字単位の約30%になります。語彙を増やして長いまとまりを扱うことで、同じ文章を短い ID 列で表せます。
+
+どちらの方式も、最後にモデルへ渡すものは整数の ID 列なので、nanoGPT は同じモデルで両方の方式を学習できます。最初から学習する場合は、使う tokenizer に合わせて語彙サイズを設定します。語彙サイズが変わると、各 ID に対応する embedding の項目数と、次の ID を予測する出力の要素数も変わります。
+
+保存先は文字単位では `data/shakespeare_char/`、GPT-2 の BPE では `data/shakespeare/` で、`train.bin` と `val.bin` の形式は共通です。文字単位では、本文から作った語彙と ID の対応を `meta.pkl` に保存しますが、GPT-2 の BPE では、既存の対応を `tiktoken` から読み込むため、`meta.pkl` は生成しません。
+
+## 次章の内容
+
+ここまでで得たのは、語彙サイズ $V$ と、各要素が $0$ 以上 $V$ 未満の整数である1次元の ID 列です。文字列への復元には、変換時と同じ対応表が必要です。この ID 列が、embedding やトークン予測の計算への入力になります。
+
+次章では、長い ID 列から長さ $T$ の入力を切り出し、1トークン先へずらした正解とペアで作るところをみます。それらを $B$ 個まとめると、入力と正解はいずれも形状 $B \times T$ の多次元配列になります。

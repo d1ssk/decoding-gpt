@@ -1,6 +1,6 @@
 ---
 title: 'nanoGPT 概要'
-description: 'nanoGPTのコード構成と、データ準備・モデル・学習・生成の処理の流れ。'
+description: 'nanoGPT のコード構成と、データ準備・モデル・学習・生成の処理の流れ。'
 order: 0
 series: nanogpt
 lang: ja
@@ -22,22 +22,20 @@ experimentId: nanogpt-00-overview
 import ChapterList from '../../../../components/ChapterList.astro';
 import PipelineDiagram from '../../../../components/PipelineDiagram.astro';
 
-nanoGPTは、GPT-2スタイルの言語モデルを訓練し、文章を生成するための小さなコードベースです。中心にあるのは、モデルを定義する約300行の `model.py` と、訓練を進める約300行の `train.py` です。その周囲に、データ準備、設定、生成、計測のためのコードが置かれています。
+nanoGPT では、GPT-2 スタイルの言語モデルの学習と文章生成を行うことができます。コードは必要最小限に抑えられており、モデルの仕組みを理解しやすい構成になっています。中心となるのは、モデルを定義する約300行の `model.py` と、学習を進める約300行の `train.py` です。その補助として、データ準備、設定、生成、計測のためのコードが置かれています。
 
-ファイル数は少ないものの、「教育用に1行ずつ説明するための実装」ではありません。GPU、mixed precision、分散学習、checkpoint、GPT-2 weightの読み込みまで、同じコードベースの中に収められています。そのため、最初から行順に読み進めるよりも、**1 batchのtokenがどのファイルを通り、どのようなtensorへ変わっていくのか**を先に把握した方が理解しやすくなります。
+そのコンパクトな実装には、GPU、mixed precision、分散学習、checkpoint、GPT-2 weight の読み込みまで収められています。まず、**1 batch の token がどのファイルを通り、どのような多次元配列へ変わっていくのか**を追うと、計算の流れと各処理の役割をつかめます。
 
-nanoGPTの処理は、大きく次の4つに分けられます。
+nanoGPT の処理は、大きく次の4つに分けられます。
 
-1. テキストをtoken列へ変えるデータ準備
-2. token列から次tokenを予測するGPT本体
-3. lossからparameterを更新する訓練loop
-4. 学習済みmodelから文章を生成するsampling
+1. テキストを token 列へ変えるデータ準備
+2. token 列から次 token を予測する GPT 本体
+3. loss から parameter を更新する学習 loop
+4. 学習済み model から文章を生成する sampling
 
-参照するupstreamは [`karpathy/nanoGPT`](https://github.com/karpathy/nanoGPT/tree/3adf61e154c3fe3fca428ad6bc3818b27a3b8291) の commit `3adf61e154c3fe3fca428ad6bc3818b27a3b8291` に固定します。リンク先の行番号やコード構成も、このcommitを基準にしています。
+## nanoGPT が扱う範囲
 
-## nanoGPTが扱う範囲
-
-nanoGPTの主題は、decoder-only Transformerによる**次token予測**です。入力されたtoken列から、それぞれの位置で次に来るtokenのscoreを計算します。この計算を大量の文章に対して繰り返せばpretrainingになり、既存のweightから小さなlearning rateで学習を続ければfine-tuningになります。さらに、学習済みのweightを使って予測したtokenを入力へ戻し続ければ、文章を生成できます。
+nanoGPT の主題は、decoder-only Transformer による **next token 予測**です。入力された token 列から、それぞれの位置で次に来る token の score を計算します。この計算と weight 更新を大量の文章に対して繰り返せば pretraining になり、既存の weight から小さな learning rate で学習を続ければ fine-tuning になります。学習済みの weight を使って予測した token を入力へ戻し続ければ、一連の文章を生成できます。
 
 ```text
 pretraining   : random weights + token data → trained weights
@@ -45,77 +43,78 @@ fine-tuning   : pretrained weights + new token data → adapted weights
 generation    : trained weights + prompt → one token → append → repeat
 ```
 
-一方で、nanoGPTだけでChatGPTのようなsystem全体が作られるわけではありません。対話format、instruction tuning、preference optimization、tool use、serving、chat UIなどは、nanoGPTが主に扱う範囲の外です。このシリーズでは、まずnanoGPTを通してlanguage modelの核を追い、その後nanochatでより広いstackへ進みます。
+ChatGPT のような対話システムを作るには、この核となるモデルに対話 format、instruction tuning、preference optimization、tool use、serving、chat UI などを組み合わせます。このシリーズでは、まず nanoGPT で言語モデルの核を学び、その後 nanochat で対話モデルの学習・評価・推論へ進みます。
 
-## repository全体の見取り図
+## repository の構成
 
-upstreamのtop levelを役割ごとに整理すると、次のようになります。
+repository の構成を役割ごとに整理すると、次のようになります。
 
 ```text
 nanoGPT/
-├── model.py                       GPT本体、optimizer、生成
-├── train.py                       data loading、評価、訓練loop、checkpoint
-├── sample.py                      checkpointを読み、promptから生成
-├── configurator.py                config fileとCLI引数による設定上書き
-├── bench.py                       forward/backwardの速度計測
+├── model.py                       GPT 本体、optimizer、生成
+├── train.py                       data loading、評価、学習 loop、checkpoint
+├── sample.py                      checkpoint を読み、prompt から生成
+├── configurator.py                config file と CLI 引数による設定上書き
+├── bench.py                       forward/backward の速度計測
 ├── config/
-│   ├── train_shakespeare_char.py  小さな文字単位GPTの設定
-│   ├── train_gpt2.py              GPT-2 124M再現用の設定
-│   ├── finetune_shakespeare.py    GPT-2 fine-tuningの設定
-│   └── eval_gpt2*.py              pretrained GPT-2の評価設定
+│   ├── train_shakespeare_char.py  小規模な文字単位 GPT 用の設定
+│   ├── train_gpt2.py              GPT-2 124M 再現用の設定
+│   ├── finetune_shakespeare.py    GPT-2 fine-tuning の設定
+│   └── eval_gpt2*.py              pretrained GPT-2 の評価設定
 ├── data/
 │   ├── shakespeare_char/prepare.py
 │   ├── shakespeare/prepare.py
-│   └── openwebtext/prepare.py     textをtokenizeしbinaryへ保存
-├── transformer_sizing.ipynb       model sizeとmemoryの見積もり
-└── scaling_laws.ipynb             compute配分の検討
+│   └── openwebtext/prepare.py     text を tokenize し binary へ保存
+├── transformer_sizing.ipynb       model size と memory の見積もり
+└── scaling_laws.ipynb             compute 配分の検討
 ```
 
-主要なファイルは、それぞれ次の役割を持ちます。
+主要なファイルには、それぞれ次のような役割があります。
 
-| 場所                                                                                                                                | 役割                                                      | このシリーズで注目するもの                |
-| ----------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ----------------------------------------- |
-| [`data/*/prepare.py`](https://github.com/karpathy/nanoGPT/tree/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data)                       | textの取得、train/validation分割、tokenize、binary保存    | token ID、語彙、datasetの境界             |
-| [`model.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py)                            | Transformerの全module、forward、optimizer構築、generation | shape、attention、residual stream、logits |
-| [`train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py)                            | batch作成、model初期化、評価、backpropagation、checkpoint | input/target、loss、gradient、更新順序    |
-| [`sample.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/sample.py)                          | modelとtokenizerを復元し、promptからsampleする            | temperature、top-k、encode/decode         |
-| [`configurator.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/configurator.py) と `config/` | 実験条件をdefaultから上書きする                           | model size、data、learning rate、runtime  |
-| [`bench.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/bench.py)                            | 訓練の中心部分を切り出して速度を測る                      | iteration time、MFU、bottleneck           |
+| 場所                                                                                                                                | 役割                                                         | このシリーズで注目するもの                |
+| ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------- |
+| [`data/*/prepare.py`](https://github.com/karpathy/nanoGPT/tree/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data)                       | text の取得、train/validation 分割、tokenize、binary 保存    | token ID、語彙、dataset の境界            |
+| [`model.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py)                            | Transformer の全 module、forward、optimizer 構築、generation | shape、attention、residual stream、logits |
+| [`train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py)                            | batch 作成、model 初期化、評価、backpropagation、checkpoint  | input/target、loss、gradient、更新順序    |
+| [`sample.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/sample.py)                          | model と tokenizer を復元し、prompt から sample する         | temperature、top-k、encode/decode         |
+| [`configurator.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/configurator.py) と `config/` | 実験条件を default から上書きする                            | model size、data、learning rate、runtime  |
+| [`bench.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/bench.py)                            | 学習の中心部分を切り出して速度を測る                         | iteration time、MFU、bottleneck           |
 
-`model.py`だけを読んでも、GPTがどのように訓練されるのかは分かりません。一方、`train.py`だけを読んでも、`model(X, Y)`の中で何が起きているのかは分かりません。nanoGPTを理解するには、**データの値を追う視点**と**ファイル間の制御の流れを追う視点**を行き来する必要があります。
+`model.py` で `model(X, Y)` の内部の計算を確認し、`train.py` でその計算を学習に使う手順を確認します。**データの値**と**ファイル間の制御の流れ**を行き来しながら読むと、モデルの計算から parameter 更新までをつなげて理解できます。
 
-## textから生成までの一本の流れ
+## 学習用 text から生成までの一本の流れ
 
 <PipelineDiagram
-  caption="Conceptual flow / nanoGPT end to end"
-  note="概念図です。実際のtrainingでは評価、gradient accumulation、mixed precision、DDP、checkpointなどの処理が周囲に加わります。"
+  note="概念図です。実際の training では評価、gradient accumulation、mixed precision、DDP、checkpoint などの処理が周囲に加わります。"
   steps={[
     { label: 'データ準備', detail: 'text → token ID' },
-    { label: 'token列', detail: 'train.bin / val.bin' },
-    { label: 'batch', detail: '入力x / 正解y' },
+    { label: 'token 列', detail: 'train.bin / val.bin' },
+    { label: 'batch', detail: '入力 x / 正解 y' },
     { label: 'GPT forward', detail: 'hidden state → logits' },
     { label: 'loss / 更新', detail: 'backward → AdamW' },
     { label: '保存 / 生成', detail: 'checkpoint → sample' },
   ]}
 />
 
-### 1. データをtoken IDへ変える
+### 1. データを token ID へ変える
 
-modelは文字列を直接受け取りません。`prepare.py`でtextをtokenizeし、整数の並びへ変換します。
+model が受け取るのは token ID の列です。`prepare.py` で text を tokenize し、整数の並びへ変換します。
 
-文字単位の[`data/shakespeare_char/prepare.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data/shakespeare_char/prepare.py#L19-L61)では、登場する文字を並べて語彙を作り、`stoi`で文字からIDへ、`itos`でIDから文字へ変換します。GPT-2と同じBPEを使うdatasetでは、`tiktoken`が同じ役割を担います。
+文字単位の [`data/shakespeare_char/prepare.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data/shakespeare_char/prepare.py#L19-L61) では、登場する文字を並べて語彙を作り、`stoi` で文字から ID へ、`itos` で ID から文字へ変換します。GPT-2 と同じ BPE （Byte Pair Encoding: よく現れる並びをまとめて token にする方式）を使う dataset では、`tiktoken` が同じ役割を担います。
 
-処理後に作られる中心的なartifactは、次の3つです。
+データ準備によって、主に次の3つのファイルが生成されます。
 
-- `train.bin`: parameter更新に使うtoken列
-- `val.bin`: 学習には使わず、lossを見積もるためのtoken列
-- `meta.pkl`: 文字単位datasetの語彙sizeとencode/decode情報
+- `train.bin`: parameter 更新に使う token 列
+- `val.bin`: 検証用の loss を見積もるために分けておく token 列
+- `meta.pkl`: 文字単位 dataset の語彙サイズ と encode/decode 情報
 
-binary fileの中身は「文書の表」ではなく、連結された長いtoken streamです。訓練時には、このstreamの一部を切り出して文脈窓を作ります。
+binary file には、連結された長い token stream が入っています。学習時には、この stream の一部を切り出して context window を作ります。
 
-### 2. 1 tokenずれたinputとtargetを作る
+### 2. 1 token ずれた input と target を作る
 
-[`train.py`の`get_batch()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L114-L131)では、開始位置をrandomに選び、長さ`block_size`の入力`x`と、それを1 token先へずらした正解`y`を作ります。
+[`train.py` の `get_batch()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L114-L131) では、token 列から開始位置をランダムに $B$ 個選びます。それぞれの位置から `block_size` 個の token を入力 `x` として切り出し、開始位置を 1 token 先へずらして同じ長さを切り出したものを、正解 `y` とします。
+
+次は、`block_size = 8` の場合の 1 サンプルです。説明のため各文字を 1 token として示していますが、実際の `x` と `y` には整数の token ID が入ります。
 
 ```text
 token stream : G  P  T  は  次  を  予  測  す  る
@@ -123,21 +122,25 @@ input x      : G  P  T  は  次  を  予  測
 target y     : P  T  は  次  を  予  測  す
 ```
 
-batch sizeを$B$、context lengthを$T$とすると、`x`と`y`のshapeはいずれも$B \times T$です。1回のforwardで、$B \times T$個の次token予測を同時に評価できます。
+batch size を $B$、入力の token 数を $T$ とすると、`x` と `y` の shape はいずれも $B \times T$ です。ここでは $T = \texttt{block\_size}$ になります。
 
-### 3. GPTがlogitsを計算する
+各位置では、**その位置までの入力を使って次の token を予測**します。例えば、最初の位置では `G` から `P` を予測し、最後の位置では `GPTは次を予測` から `す` を予測します。causal mask により、各位置から未来の token への参照が制限されます。
 
-`x`は[`GPT.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L170-L193)へ渡されます。token embeddingとposition embeddingを加え、複数のTransformer blockを通した後、最後にlanguage-model headが各語彙tokenのscoreを出します。
+学習時には、1 回の forward で全 $B \times T$ 位置の予測を並列に計算し、対応する `y` と比較して loss を求めます。
+
+### 3. GPT が logits を計算する
+
+`x` は [`GPT.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L170-L193) へ渡されます。まず各 token ID を token embedding によって高次元のベクトルに変換し、position embedding によって token 位置も同じ次元のベクトルに変換して、両者を足し合わせます。続いて、self-attention で各位置自身とそれ以前の token の情報を取り込み、MLP で各位置の表現を更新する Transformer block を複数回通します。最後に、language-model head という線形層が各位置のベクトルを語彙数分の score に変換します。この確率に変換する前の score を **logits** と呼びます。
 
 ```python
 logits, loss = model(X, Y)
 ```
 
-`logits`のshapeは$B \times T \times V$です。$V$はvocabulary sizeで、`logits[b, t, v]`はbatch `b`の位置`t`において、次token `v`に与えられた未正規化scoreを表します。
+logits の shape は $B \times T \times V$ です。$B$ は batch size、$T$ は系列長、$V$ は vocabulary size を表します。logits[b, t, v] は、batch b の位置 t までの token 列に続く次の token が v であることに対する score です。
 
-### 4. lossからparameterを更新する
+### 4. loss から parameter を更新する
 
-`targets`が渡された場合、`GPT.forward()`は全位置のcross entropyも計算します。訓練loopでは、このscalar lossからgradientを求め、AdamWでparameterを更新します。
+`targets` が渡された場合、`GPT.forward()` は各位置の予測確率分布と正解 token の間の cross entropy も計算します。学習 loop では、この scalar loss から gradient を求め、AdamW（gradient に基づいて更新幅を適応的に調整する最適化手法）で parameter を更新します。
 
 ```python
 optimizer.zero_grad(set_to_none=True)
@@ -145,17 +148,17 @@ loss.backward()
 optimizer.step()
 ```
 
-実際の`train.py`では、この基本形にgradient accumulation、mixed-precision用の`GradScaler`、gradient clipping、learning-rate schedule、DDPによるgradient同期が加わります。複雑に見える部分の多くはmodelの意味そのものを変える処理ではなく、大規模な訓練を安定して効率よく実行するためのものです。
+実際の `train.py` では、この基本形に gradient accumulation、mixed-precision 用の `GradScaler`、gradient clipping、learning-rate schedule、DDP による gradient 同期が加わります。これらは大規模な学習を安定して効率よく実行するための処理で、後の章で詳しくみます。
 
-### 5. checkpointを保存し、生成に使う
+### 5. checkpoint を保存し、生成に使う
 
-一定間隔でtrain/validation lossを見積もり、model parameter、optimizer state、iteration、configをcheckpointへ保存します。`sample.py`はこのcheckpointを読み込み、`model.generate()`を呼びます。token列を1 tokenずつ伸ばしていく処理は、`generate()`の内部で繰り返されます。
+一定間隔で train/validation loss を見積もり、model parameter、optimizer state、iteration、config を checkpoint へ保存します。`sample.py` はこの checkpoint を読み込み、`model.generate()` を呼びます。
 
-生成時には正解`y`がありません。最後の位置のlogitsをtemperatureで調整し、必要ならtop-k以外を除外してからsoftmaxを適用し、次tokenを1つsampleします。選んだtokenをinputの末尾へ追加し、同じ処理を繰り返します。
+生成時は、それまでの token 列をもとに続きを予測します。最後の位置の logits を temperature で調整し、必要なら top-k に候補を絞ってから softmax を適用し、次の token を1つ sample します。選んだ token を input の末尾へ追加し、同じ処理を繰り返します。
 
-## `model.py`の内部構造
+## `model.py` の内部構造
 
-`model.py`では、下位のmoduleから順に`LayerNorm`、`CausalSelfAttention`、`MLP`、`Block`、`GPT`が定義されています。実行時の包含関係は次のようになります。
+[`model.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py) では、下位の module から順に `LayerNorm`、`CausalSelfAttention`、`MLP`、`Block`、`GPT` が定義されています。実行時の包含関係は次のようになります。
 
 ```text
 GPT
@@ -172,67 +175,79 @@ GPT
 └── language-model head           C → V
 ```
 
-ここで$C$はembedding dimensionです。model内の中心的なshapeは、次のように変化していきます。
+ここで $C$ は embedding dimension（`n_embd`）、$H$ は attention head の数（`n_head`）です。各 head の次元数は $d_{\text{head}} = C/H$ で、$C$ は $H$ で割り切れる必要があります。model 内の中心的な shape は、次のように変化していきます。
 
 | 段階                | shape                            | 値の意味                       |
 | ------------------- | -------------------------------- | ------------------------------ |
-| token ID            | $B \times T$                     | 語彙表へのindex                |
-| token embedding     | $B \times T \times C$            | tokenごとの学習可能なvector    |
-| position embedding  | $T \times C$                     | sequence内の位置を表すvector   |
-| query / key / value | $B \times H \times T \times C/H$ | attention headごとの表現       |
+| token ID            | $B \times T$                     | 語彙表への index               |
+| token embedding     | $B \times T \times C$            | token ごとの学習可能な vector  |
+| position embedding  | $T \times C$                     | sequence 内の位置を表す vector |
+| query / key / value | $B \times H \times T \times C/H$ | attention head ごとの表現      |
 | attention weight    | $B \times H \times T \times T$   | 各位置から過去の各位置への重み |
-| residual stream     | $B \times T \times C$            | block間を流れるhidden state    |
-| logits              | $B \times T \times V$            | 次token候補のscore             |
+| residual stream     | $B \times T \times C$            | block 間を流れる hidden state  |
+| logits              | $B \times T \times V$            | 次 token 候補の score          |
 
-### causal self-attention
+### causal self attention
 
-[`CausalSelfAttention`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L29-L76)では、入力をquery、key、valueへ射影し、複数のheadへ分割します。1つのheadでは、おおむね次の計算を行います。
+[`CausalSelfAttention`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L29-L76) が受け取る入力は、各 token 位置に $C$ 次元のベクトルを持つ、shape が $B \times T \times C$ の多次元配列です。最初の Transformer block では token embedding と position embedding を足し合わせた表現を、2 層目以降では前の block の出力を使います。各 block では、その表現に LayerNorm で各 token 位置のベクトルの平均と分散を整えてから `CausalSelfAttention` へ渡します。
+
+Attention は、各 token 位置について、それ以前のどの位置の情報をどれだけ取り込むかを決め、重みに従って情報を集める処理です。**Multi-head attention では、この処理を複数並列に行い、その一つひとつを head と呼びます**。各 head では、どの位置を重視するかの判断基準と、そこから取り込む情報の表現をそれぞれ学習するため、同じ入力から異なる関係や特徴を捉えることができます。
+
+各 head では、入力の $C$ 次元ベクトルから、それぞれ $d_{\text{head}}=C/H$ 次元の query、key、value ベクトルを作ります。query と key は位置どうしの参照の重みを決めるための表現で、value はその重みに従って集める情報を表します。実装上は、$H$ 個の head の query、key、value の線形変換をまとめて行います。具体的には、各 token の $C$ 次元ベクトルを $3C$ 次元に変換し、 query、key、value に対応する $C$ 次元ずつに分け、さらに $H$ 個の head に分割します。最終的な shape は $B \times H \times T \times d_{\text{head}}$ です。
+
+1 サンプルの 1 head に注目すると、query、key、value はそれぞれ $T \times d_{\text{head}}$ の 2 次元配列 $Q$、$K$、$V$ になります。参照の重み $A$ と出力 $Y$ は、次のように計算します。
 
 $$
 A = \operatorname{softmax}\left(\frac{QK^\top}{\sqrt{d_{\text{head}}}} + M\right),
 \qquad Y = AV
 $$
 
-$M$はcausal maskです。未来位置のscoreを$-\infty$にすることで、softmax後の重みは0になります。そのため、位置$t$での予測は位置$0$から$t$までだけを参照し、正解となる未来tokenを先に見ることはできません。
+ここで、$M$ は causal mask で、未来位置の score を $-\infty$ にすることで、softmax 後の重みを0にする働きがあります。これにより、位置 $t$ での予測が参照する範囲を、位置 $0$ から $t$ までに限定します。
 
-PyTorchが対応していれば、nanoGPTは`scaled_dot_product_attention`のfused実装を使います。対応していない環境では、mask、softmax、valueとの積をコード上で明示的に計算します。計算の意味は同じですが、後者の方が中間tensorを観察しやすくなります。
+PyTorch が対応していれば、nanoGPT は `scaled_dot_product_attention` の fused 実装を使います。対応していない環境では、mask、softmax、value との積をコード上で明示的に計算します。計算の意味は同じですが、後者の方が中間の多次元配列を観察しやすくなります。
 
-### MLPとresidual stream
+### MLP と residual stream
 
-attentionがtoken位置どうしの情報を混ぜるのに対し、[`MLP`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L78-L92)は、各位置のchannel方向を変換します。dimensionを$C$から$4C$へ広げ、GELUを通した後、再び$C$へ戻します。
+attention が token 位置どうしの情報を混ぜるのに対し、[`MLP`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L78-L92) は各 token 位置のベクトルを個別に変換します。具体的には、$C$ 次元のベクトルを線形変換で $4C$ 次元に広げ、非線形な活性化関数 GELU を通した後、別の線形変換で $C$ 次元に戻します。これにより、各位置のベクトルの成分（channel）を組み合わせて、より複雑な特徴を表現できます。MLP はすべての位置に同じ変換を適用し、位置どうしの情報は混ぜません。
 
-[`Block`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L94-L106)では、attentionとMLPの出力を元の`x`へ加えます。このresidual connectionにより、`x`のshapeはblockを何層通っても$B \times T \times C$のままです。このシリーズでは、同じshapeの箱を流れる値が各層でどのように変わるのかを追っていきます。
+[`Block`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L94-L106) では、LayerNorm を通した入力を attention と MLP で順に処理し、それぞれの出力を入力に足し合わせます。この仕組みを residual connection（残差接続） と呼び、各処理を通さずに元の情報を直接引き継ぐ経路を作ることで、深いネットワークでも学習を進めやすくします。
 
-### 最後にlogitsへ戻す
+Attention も MLP も出力は $C$ 次元なので、足し合わせた後も x の shape は $B \times T \times C$ のままです。このように各 block を通じて更新されていく x を residual stream と呼びます。このシリーズでは、同じ shape を保ちながら、その中の値が各層でどのように変化していくのかを追っていきます。
 
-全blockを通った後、final LayerNormを適用し、`lm_head`が$C$次元のhidden stateを$V$個のlogitsへ変換します。token embeddingのweightと`lm_head`のweightは共有されています。入力時にtokenをvectorへ変換した表を、出力時には各tokenとのscoreを作る表として再利用する構成です。
+### 最後に logits へ戻す
 
-## `train.py`を役割ごとに読む
+すべての Transformer block を通った後、各 token 位置の $C$ 次元ベクトル（hidden state）に最後の LayerNorm を適用します。続いて `lm_head` が、語彙に含まれる $V$ 種類の token それぞれについて、次の token としてのスコアを計算します。この $V$ 次元のスコアを logits と呼び、softmax を適用することで各 token が次に現れる確率に変換できます。
 
-`train.py`は長く見えますが、上から6つの区画に分けると整理しやすくなります。
+`lm_head` と token embedding は同じ weight を共有します。入力時には token ID から $C$ 次元ベクトルを取り出すために使った表を、出力時には hidden state と各 token のベクトルの内積からスコアを計算するために再利用します。
 
-1. **default config** — dataset、model size、optimizer、評価間隔、deviceなどを定義する。
-2. **runtime setup** — 単一processかDDPかを判定し、seed、device、dtype、autocastを準備する。
-3. **data loading** — `np.memmap`でbinaryを開き、`get_batch()`で`X, Y`を作る。
-4. **model setup** — scratch、checkpoint再開、pretrained GPT-2のいずれかからmodelを作り、optimizerを設定する。
-5. **evaluation and scheduling** — train/validation lossとlearning rateを計算し、checkpoint条件を判断する。
-6. **training loop** — forward、backward、gradient処理、optimizer step、loggingを繰り返す。
+学習時にはすべての位置について logits を計算するため、出力の shape は $B \times T \times V$ になります。一方、文章の生成時には、最後の位置の logits を使って次の token を選びます。
 
-modelの初期化には3つの入口があります。
+## `train.py` を役割ごとに読む
 
-| `init_from` | 開始状態                               | 用途                          |
-| ----------- | -------------------------------------- | ----------------------------- |
-| `scratch`   | randomに初期化したweight               | pretrainingを最初から行う     |
-| `resume`    | `out_dir/ckpt.pt`のmodelとoptimizer    | 中断した訓練を続ける          |
-| `gpt2*`     | Hugging Faceから読み込んだGPT-2 weight | 評価またはfine-tuningを始める |
+[`train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py) は長く見えますが、上から6つの区画に分けると整理しやすくなります。
 
-この3つの経路は開始時のweightこそ異なりますが、最終的には同じ`GPT` instanceと同じtraining loopへ合流します。
+1. **default config** — dataset、model size、optimizer、評価間隔、device などを定義する。
+2. **runtime setup** — 単一 process か DDP かを判定し、seed、device、dtype、autocast を準備する。
+3. **data loading** — `np.memmap` で binary を開き、`get_batch()` で `X, Y` を作る。
+4. **model setup** — scratch、checkpoint 再開、pretrained GPT-2 のいずれかから model を作り、optimizer を設定する。
+5. **evaluation and scheduling** — train/validation loss と learning rate を計算し、checkpoint 条件を判断する。
+6. **training loop** — forward、backward、gradient 処理、optimizer step、logging を繰り返す。
 
-## configは実験条件そのもの
+model の初期化には3つの入口があります。
 
-nanoGPTでは、architectureと訓練条件を`train.py`のdefaultから、`config/*.py`と`--key=value`で上書きします。[`configurator.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/configurator.py#L20-L47)は小さな仕組みですが、実験の再現性を考える上では重要です。
+| `init_from` | 開始状態                                 | 用途                            |
+| ----------- | ---------------------------------------- | ------------------------------- |
+| `scratch`   | random に初期化した weight               | pretraining を最初から行う      |
+| `resume`    | `out_dir/ckpt.pt` の model と optimizer  | 中断した学習を続ける            |
+| `gpt2*`     | Hugging Face から読み込んだ GPT-2 weight | 評価または fine-tuning を始める |
 
-たとえば、upstreamのdefaultと文字単位Shakespeareのconfigでは、規模が大きく異なります。
+この3つの経路は開始時の weight こそ異なりますが、最終的には同じ `GPT` instance と同じ training loop へ合流します。
+
+## config は実験条件そのもの
+
+nanoGPT では、architecture と学習条件を `train.py` の default から、`config/*.py` と `--key=value` で上書きします。[`configurator.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/configurator.py#L20-L47) は小さな仕組みですが、実験の再現性を考える上では重要です。
+
+たとえば、参照元リポジトリの default と文字単位 Shakespeare の config では、規模が大きく異なります。
 
 | 設定                | `train.py` default | Shakespeare character config |
 | ------------------- | -----------------: | ---------------------------: |
@@ -242,68 +257,53 @@ nanoGPTでは、architectureと訓練条件を`train.py`のdefaultから、`conf
 | embedding dimension |                768 |                          384 |
 | dataset             |        OpenWebText |             Tiny Shakespeare |
 
-model sizeだけでなく、batch size、learning rate、iteration数、dropout、評価回数、deviceも結果や実行時間を変えます。「同じコードを動かした」というだけでは、同じ実験を行ったことにはなりません。どのconfigとcommitを使ったのかを記録しておく必要があります。
+model size、batch size、learning rate、iteration 数、dropout、評価回数、device は、いずれも結果や実行時間に影響します。実験を再現できるように、使用した config と commit を記録します。
 
 ## 学習と生成はどこまで同じか
 
-学習と生成は、token IDからhidden stateとlogitsを得るところまで同じmodelを共有します。違うのは、得られたlogitsをどのように使うかです。
+学習と生成は、token ID から hidden state と logits を得るところまで同じ model を共有します。違うのは、得られた logits をどのように使うかです。
 
-|                | 学習                  | 生成                                 |
-| -------------- | --------------------- | ------------------------------------ |
-| modelへの入力  | token ID `X`と正解`Y` | promptと、それまでに生成したtoken ID |
-| 必要なlogits   | 全$B \times T$位置    | 最後の1位置                          |
-| logitsの使い方 | cross entropyを計算   | softmaxして次tokenを選ぶ             |
-| parameter      | gradientで更新する    | 固定する                             |
-| 繰り返し単位   | batch                 | 生成する1 token                      |
+|                 | 学習                    | 生成                                   |
+| --------------- | ----------------------- | -------------------------------------- |
+| model への入力  | token ID `X` と正解 `Y` | prompt と、それまでに生成した token ID |
+| 必要な logits   | 全 $B \times T$ 位置    | 最後の1位置                            |
+| logits の使い方 | cross entropy を計算    | softmax して次 token を選ぶ            |
+| parameter       | gradient で更新する     | 固定する                               |
+| 繰り返し単位    | batch                   | 生成する1 token                        |
 
-この対応を押さえておくと、`train.py`と`sample.py`が別々のmodelを使っているのではなく、同じ`GPT.forward()`を異なる目的で呼び出していることが分かります。
+`train.py` と `sample.py` は、同じ `GPT.forward()` をそれぞれ学習と生成のために呼び出しています。
 
-## source codeを読む推奨順序
+## source code を読む推奨順序
 
-最初はfileの先頭から読むのではなく、次の順番で値を追うことを勧めます。
+最初は、次の順番でデータの値と計算を追うと、処理全体のつながりをつかみやすくなります。
 
-1. [`data/shakespeare_char/prepare.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data/shakespeare_char/prepare.py)で、textとtoken IDの対応を見る。
-2. [`train.py:get_batch()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L114-L131)で、`X`と`Y`が1 tokenずれていることを確認する。
-3. [`GPT.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L170-L193)で、embeddingからlogitsまでを一度通して読む。
-4. [`Block`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L94-L106)と[`CausalSelfAttention`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L29-L76)へ降り、中間shapeを追う。
-5. [`train.py`のtraining loop](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L249-L333)へ戻り、lossから更新までを見る。
-6. [`GPT.generate()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L305-L330)と[`sample.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/sample.py)で、出力tokenが次の入力になるloopを見る。
+1. [`data/shakespeare_char/prepare.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data/shakespeare_char/prepare.py) で、text と token ID の対応を見る。
+2. [`train.py:get_batch()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L114-L131) で、`X` と `Y` が1 token ずれていることを確認する。
+3. [`GPT.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L170-L193) で、embedding から logits までを一度通して読む。
+4. [`Block`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L94-L106) と [`CausalSelfAttention`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L29-L76) へ降り、中間 shape を追う。
+5. [`train.py` の training loop](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L249-L333) へ戻り、loss から更新までを見る。
+6. [`GPT.generate()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L305-L330) と [`sample.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/sample.py) で、出力 token が次の入力になる loop を見る。
 
-この順序なら、分散学習や高速化の詳細へ入る前に、language modelとして必要な計算を一周できます。
+この順序なら、分散学習や高速化の詳細へ入る前に、language model として必要な計算を一周できます。
 
 ## このシリーズでの学び方
 
-この先では、同じend-to-end flowを4段階に分けて深掘りしていきます。
+この先では、同じ end-to-end flow を4段階に分けて深掘りしていきます。
 
-### Phase 1 — dataを作る
+### Phase 1 — data を作る
 
-第1–2章では、textをtoken IDへ変換し、長いtoken streamから文脈窓と正解を作ります。ここで見る中心的な値は、`stoi` / `itos`、token列、`X [B,T]`、`Y [B,T]`です。
+第1–2章では、text を token ID へ変換し、長い token stream から context window と正解を作ります。ここで見る中心的な値は、`stoi` / `itos`、token 列、`X [B,T]`、`Y [B,T]` です。
 
-### Phase 2 — forward passを分解する
+### Phase 2 — forward pass を分解する
 
-第3–8章では、`GPT.forward()`をembedding、position、self-attention、multi-head化、MLP、residual stream、logits、lossへと分けて見ていきます。各段階でtensor shapeだけでなく、値の範囲や「その軸が何を表しているのか」も可視化します。
+第3–8章では、`GPT.forward()` を embedding、position、self attention、multi-head attention、MLP、residual stream、logits、loss へと分けて見ていきます。各段階で 多次元配列の shape、値の範囲、各軸の意味を可視化します。
 
-### Phase 3 — modelが学ぶ仕組みを見る
+### Phase 3 — model が学ぶ仕組みを見る
 
-第9–11章では、lossからgradientがどのように伝わるのか、optimizerがどのparameterをどう更新するのか、train/validation lossをどう読むのかを扱います。最後に小さなGPTを実際に訓練し、学習前後の出力を比較します。
+第9–11章では、loss から gradient がどのように伝わるのか、optimizer がどの parameter をどう更新するのか、train/validation loss をどう読むのかを扱います。最後に小規模な GPT を実際に学習させ、学習前後の出力を比較します。
 
-### Phase 4 — 規模とsystemの違いへ進む
+### Phase 4 — 規模と system の違いへ進む
 
-第12章では、parameter数、context length、batch size、computeのtrade-offを実験します。第13章では、nanoGPTで扱ったpretrainingの核を出発点に、nanochatが追加するdata、evaluation、inference、chat向けの処理へ進みます。
+第12章では、parameter 数、context length、batch size、compute の trade-off を実験します。第13章では、nanoGPT で扱った pretraining の核を出発点に、nanochat が追加する data、evaluation、inference、chat 向けの処理へ進みます。
 
 <ChapterList lang="ja" compact />
-
-## データとモデルの処理の流れ
-
-nanoGPTの全体は、次の2本の経路として覚えておくと整理しやすくなります。
-
-```text
-data path:
-text → prepare.py → train.bin → get_batch → X / Y
-
-model path:
-X → GPT.forward → logits → loss → backward → optimizer → checkpoint
-                                              checkpoint → generate → text
-```
-
-これから個別の式やmoduleへ進むときも、それが処理全体のどの部分に当たるのかを確認できます。重要なのはfile名を暗記することではなく、**あるtoken IDがどこでvectorになり、どこで文脈を受け取り、どこで次tokenのscoreになり、どこでparameter更新へつながるのか**を説明できることです。

@@ -1,0 +1,15 @@
+{
+  "experimentId": "nanogpt-01-text-to-tokens",
+  "kind": "educational-character-tokenization",
+  "upstreamCommit": "3adf61e154c3fe3fca428ad6bc3818b27a3b8291",
+  "corpus": "hello\nhello\n",
+  "vocabulary": ["\n", "e", "h", "l", "o"],
+  "sample": "hello\n",
+  "ids": [2, 1, 3, 3, 4, 0],
+  "decoded": "hello\n",
+  "splitIndex": 10,
+  "trainIds": [2, 1, 3, 3, 4, 0, 2, 1, 3, 3],
+  "validationIds": [4, 0],
+  "trainBytes": 20,
+  "validationBytes": 4
+}

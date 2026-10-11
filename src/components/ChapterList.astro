@@ -26,9 +26,7 @@ const t = useTranslations(lang);
       ) : (
         <span class="chapter-title">{chapter.title[lang]}</span>
       )}
-      <span class="chapter-status">
-        {chapter.published ? t.startHere : t.planned}
-      </span>
+      {!chapter.published && <span class="chapter-status">{t.planned}</span>}
     </li>
   ))}
 </ol>

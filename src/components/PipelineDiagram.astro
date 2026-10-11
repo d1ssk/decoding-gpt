@@ -6,15 +6,15 @@ interface PipelineStep {
 
 interface Props {
   steps: PipelineStep[];
-  caption: string;
-  note: string;
+  caption?: string;
+  note?: string;
 }
 
 const { steps, caption, note } = Astro.props;
 ---
 
 <figure class="pipeline">
-  <div class="pipeline__eyebrow">{caption}</div>
+  {caption && <div class="pipeline__eyebrow">{caption}</div>}
   <ol aria-label={caption}>
     {steps.map((step, index) => (
       <li>
@@ -26,7 +26,7 @@ const { steps, caption, note } = Astro.props;
       </li>
     ))}
   </ol>
-  <figcaption>{note}</figcaption>
+  {note && <figcaption>{note}</figcaption>}
 </figure>
 
 <style>

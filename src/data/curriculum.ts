@@ -17,19 +17,22 @@ export const nanoGptChapters: Chapter[] = [
   {
     order: 1,
     slug: '01-text-to-tokens',
-    title: { ja: 'テキストからトークンへ', en: 'Text to Tokens' },
-    published: false,
+    title: { ja: 'テキストとトークン', en: 'Text and Tokens' },
+    published: true,
   },
   {
     order: 2,
     slug: '02-context-and-training-examples',
-    title: { ja: '文脈と訓練例', en: 'Context and Training Examples' },
+    title: { ja: '学習バッチの作成', en: 'Building Training Batches' },
     published: false,
   },
   {
     order: 3,
     slug: '03-embeddings-and-position',
-    title: { ja: '埋め込みと位置', en: 'Embeddings and Position' },
+    title: {
+      ja: 'トークンと位置の埋め込み',
+      en: 'Token and Position Embeddings',
+    },
     published: false,
   },
   {
@@ -47,7 +50,7 @@ export const nanoGptChapters: Chapter[] = [
   {
     order: 6,
     slug: '06-mlp-and-residual-stream',
-    title: { ja: 'MLPと残差ストリーム', en: 'MLP and the Residual Stream' },
+    title: { ja: 'MLP と残差ストリーム', en: 'MLP and the Residual Stream' },
     published: false,
   },
   {
@@ -74,13 +77,13 @@ export const nanoGptChapters: Chapter[] = [
   {
     order: 10,
     slug: '10-training-loop',
-    title: { ja: '訓練ループ', en: 'The Training Loop' },
+    title: { ja: '学習ループ', en: 'The Training Loop' },
     published: false,
   },
   {
     order: 11,
     slug: '11-train-a-tiny-gpt',
-    title: { ja: '小さなGPTを訓練する', en: 'Train a Tiny GPT' },
+    title: { ja: '小規模な GPT を学習させる', en: 'Train a Tiny GPT' },
     published: false,
   },
   {
@@ -92,7 +95,7 @@ export const nanoGptChapters: Chapter[] = [
   {
     order: 13,
     slug: '13-from-nanogpt-to-nanochat',
-    title: { ja: 'nanoGPTからnanochatへ', en: 'From nanoGPT to nanochat' },
+    title: { ja: 'nanoGPT から nanochat へ', en: 'From nanoGPT to nanochat' },
     published: false,
   },
 ];

@@ -18,7 +18,7 @@ Code → Experiment → Visualization → Understanding
 
 Content is available in Japanese and English. The first part follows **nanoGPT** from text to training; **nanochat** will extend the project to a more complete modern LLM pipeline.
 
-## Upstream projects
+## Source repositories
 
 This project studies and refers to:
 
