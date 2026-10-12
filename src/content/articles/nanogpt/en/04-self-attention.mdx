@@ -1,0 +1,356 @@
+---
+title: 'Self-Attention'
+description: 'Start with weighted sums of vectors, then trace input-dependent attention weights through nanoGPT queries, keys, values, causal masking, softmax, and code.'
+order: 4
+series: nanogpt
+lang: en
+translationKey: nanogpt-04-self-attention
+slug: 04-self-attention
+draft: false
+upstream:
+  repository: karpathy/nanoGPT
+  commit: 3adf61e154c3fe3fca428ad6bc3818b27a3b8291
+  sourceFiles:
+    - model.py
+experimentId: nanogpt-04-self-attention
+---
+
+import WeightedVectorSum from '../../../../components/WeightedVectorSum.astro';
+import QueryKeyDotProducts from '../../../../components/QueryKeyDotProducts.astro';
+
+## From embeddings to context-dependent representations
+
+In the previous chapter, adding token and position embeddings produced an array of shape `[B, T, C]`. At this stage, each position's vector depends only on its token and position. The same token at the same position produces the same vector even when the preceding token sequences differ.
+
+Predicting a continuation requires incorporating information from preceding tokens. **Self-attention** performs this task. As each position gathers information from other positions, it **computes which positions to attend to and how much weight to give them based on the input**.
+
+nanoGPT uses _causal self-attention_, which restricts each position to itself and earlier positions. This chapter follows the computation of one attention head. `B` is the batch size, `T` the input length, and `C` the number of components in each position's vector.
+
+The array `x` produced from the embeddings enters the first Transformer block. In [`Block.forward()` in `model.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L94-L106), this line calls the attention computation:
+
+```python
+x = x + self.attn(self.ln_1(x))
+```
+
+`self.ln_1(x)` normalizes each position's vector and passes the resulting array to `self.attn`. `self.attn` is an instance of `CausalSelfAttention`, created in `Block.__init__()`. The called method, `CausalSelfAttention.forward(self, x)`, receives that array as its argument `x`. **From here on, `x` denotes the input inside this method.** The `x` in `Block.forward()` is the value before normalization; the `x` inside attention is the normalized value.
+
+**This chapter examines the inside of `self.attn`.** The queries, keys, values, attention weights, and weighted sums introduced below are all parts of this call.
+
+Attention takes an array of shape `[B, T, C]` and returns an array of the same shape. Each output position contains information gathered from itself and earlier positions. `Block.forward()` adds this return value to the original `x`, forming a residual connection. Chapter 06 will examine LayerNorm and this residual connection in detail.
+
+The next section starts with the aggregation code near the end of `CausalSelfAttention.forward()`. After examining its array structure and illustrating the computation with vector diagrams, we trace how the input produces both the vectors to combine and their attention weights.
+
+## Add vectors with weights
+
+We now enter `CausalSelfAttention.forward()`, the implementation behind the `self.attn` call from the previous section. Start with **the step that aggregates information from positions**, near the end of the function. In the source's explicit computation path, this is one line:
+
+```python
+y = att @ v
+```
+
+`v` is an array of vectors holding information from each position. `att` contains the coefficients to apply to those vectors when forming each position's output. `att @ v` computes their weighted sums and stores the results in `y`.
+
+This `y` is the value immediately after aggregation. The function then restores the head axis arrangement and applies the output transformation `c_proj`, among other operations, to produce the return value of `CausalSelfAttention.forward()`. For now, assume `att` and `v` are available and examine what this one line computes.
+
+### Array shapes
+
+With this chapter's `n_head = 1`, the arrays have these shapes:
+
+```text
+att        [B, 1, T, T]
+v          [B, 1, T, C]
+y          [B, 1, T, C]
+```
+
+`B` is the batch size, `1` is the number of heads, `T` is the input length, and `C` is the number of components per vector.
+
+We can draw `v` and `y` as **grids with `B` rows and `T` columns, each cell containing a vector with `C` components**. Rows are samples and columns are positions in the input sequence. The diagram omits the head axis because it is fixed to one head.
+
+`att` contains `T × T` coefficients for each sample. **Row `t` is the output position, and column `j` is the source position.** Computing output position `t` uses row `t` of that sample's `att`. Its coefficients multiply the vectors in `v`, and the products are added together.
+
+### Follow the computation from an input position
+
+The illustrative example below uses `B = 2`, `T = 3`, and `C = 2`. It starts with the attention input `x`, an array of shape `[B, T, C]`.
+
+The inputs and linear transformation weights are generated using a fixed random seed. Applying the same linear transformation to the input at every position produces `v`. The coefficients in `att` are chosen for illustration, and `y` is computed as `att @ v`.
+
+**Select a cell in `x`.** Follow `x`, `v`, `att`, the coefficient × vector computation, and finally `y` from top to bottom. The selected position and the rows of `v` and `att` used in the computation are highlighted.
+
+<WeightedVectorSum lang="en" />
+
+For example, selecting position `t` in sample `b` picks out these arrays:
+
+```text
+att[b, 0, t, :]    [T]      Coefficients for output position t
+v[b, 0, :, :]      [T, C]   Vectors at each position in the same sample
+y[b, 0, t, :]      [C]      The output vector formed by their weighted sum
+```
+
+`@` sums products over source positions `j`. For component `c`, the computation is as follows, with $A$ denoting `att` in the code:
+
+$$
+y_{b,0,t,c} = \sum_{j=0}^{T-1} A_{b,0,t,j}v_{b,0,j,c}
+$$
+
+`y = att @ v` performs this computation for all output positions together, producing `y` of shape `[B, 1, T, C]`. Each sample and head is computed independently.
+
+In this example, we supplied the coefficients in `att`. In self-attention, **both the vectors to combine and their attention weights are produced from the input.** The next section introduces the queries, keys, and values used to do this.
+
+## Create queries, keys, and values
+
+Self-attention creates three arrays with different roles from the same input `x`. Three different linear transformations are applied to the vector at every position; the results of each transformation form the query, key, and value arrays.
+
+| Array      | Role                                                                                              |
+| ---------- | ------------------------------------------------------------------------------------------------- |
+| Query: `q` | Created at the position gathering information and compared with each key to compute source scores |
+| Key: `k`   | Created at the source position and compared with the query                                        |
+| Value: `v` | Weighted using the query–key weights and added into the output                                    |
+
+The dot product of the query at position `t` and the key at position `j` gives a score for how much `t` attends to `j`. These scores are converted to weights, which multiply the values at each position before being added to compute the output at `t`. The “self” in _self_-attention refers to queries, keys, and values all coming from the same input sequence.
+
+### Transform each position's vector with `nn.Linear`
+
+In the previous chapter, `nn.Embedding` retrieved the embedding vector corresponding to an ID. Here, `nn.Linear` applies a linear transformation to an input vector to produce a new vector.
+
+`nn.Linear(C, D)` transforms an input vector with `C` components into an output vector with `D` components. Its `weight` has shape `[D, C]`; when bias is enabled, it has an additive term of shape `[D]`. Writing the bias component as $\beta_r$, output component `r` at position `t` in sample `b` is computed as:
+
+$$
+o_{b,t,r} = \sum_{c=0}^{C-1} W_{r,c}x_{b,t,c} + \beta_r
+$$
+
+**The same weights and bias are used at every position and across the batch.** This transformation therefore processes each position independently.
+
+[`CausalSelfAttention.__init__()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L29-L51) defines the Q, K, and V transformations together in one layer:
+
+```python
+self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+```
+
+`CausalSelfAttention.forward()` splits the result into three arrays:
+
+```python
+q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
+```
+
+The input `x` of shape `[B, T, C]` becomes `[B, T, 3C]` after `c_attn`. Then `split()` divides it into `q`, `k`, and `v`, each of shape `[B, T, C]`.
+
+The Q, K, and V transformations each have their own learnable weights, but are computed together in one layer. This chapter's model uses `bias=True`; with `False`, the additive term is omitted.
+
+### Rearrange the arrays by head
+
+Next, `q`, `k`, and `v` are divided into attention heads:
+
+```python
+k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+```
+
+With `n_head = 1`, the shape changes from `[B, T, C]` to `[B, T, 1, C]` and then to `[B, 1, T, C]`. `view()` splits an axis, and `transpose(1, 2)` exchanges the position and head axes.
+
+In general, with `H` heads and `d = C/H` components per head, `q`, `k`, and `v` have shape `[B, H, T, d]`. Each head uses its own queries, keys, and values to compute attention weights and a weighted sum of values. This chapter follows this computation with one head. The next chapter covers how the outputs of multiple heads are combined.
+
+## Compute scores from query–key dot products
+
+With queries and keys available at each position, we can compute scores for the source positions. In the source repository's explicit computation path, this line performs that calculation:
+
+```python
+att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+```
+
+`transpose(-2, -1)` swaps the last two axes. With one head, the shapes are:
+
+```text
+q                         [B, 1, T, C]
+k.transpose(-2, -1)       [B, 1, C, T]
+q @ k.transpose(-2, -1)   [B, 1, T, T]
+```
+
+Of the last two axes, **row `t` is the output position, and column `j` is the source position**. Each element is computed from the dot product of the query at position `t` and the key at position `j`.
+
+$$
+s_{t,j} = \frac{\boldsymbol{q}_t \cdot \boldsymbol{k}_j}{\sqrt{d}}
+= \frac{\sum_{c=0}^{d-1}q_{t,c}k_{j,c}}{\sqrt{d}}
+$$
+
+Here `d = C`. Dot products tend to vary more as the number of components grows, so division by `√d` adjusts their scale. This helps prevent the following softmax from assigning overly concentrated weights.
+
+Source positions with larger scores receive larger weights. The learned Q and K transformations determine which pairs receive high scores. In general, `s[t, j]` and `s[j, t]` differ.
+
+The illustrative example below uses `B = 2`, `T = 3`, and `C = 2`. It applies separate query and key linear transformations to the same input `x` used in the earlier diagram. Queries and keys are shown in separate `B × T` tables.
+
+Select sample `b` in either table to highlight the same row in both tables and show all its pairs in the lower `T × T` table. Cell `(t, j)` overlays query `qₜ` and key `kⱼ` on the same plane, with their dot product below. The numbers are the values before division by `√2`.
+
+<QueryKeyDotProducts lang="en" />
+
+## Causal masking and softmax
+
+Autoregressive language models such as nanoGPT predict the next token from the tokens through position `t`. Training processes the entire input sequence together, so allowing each position to access future tokens would reveal information about its prediction target. Each position is therefore restricted to itself and earlier positions. A _causal mask_ enforces this restriction.
+
+nanoGPT applies the causal mask to the scores, then computes attention weights with softmax.
+
+```python
+att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+att = F.softmax(att, dim=-1)
+```
+
+Here `self.bias` is a buffer holding a mask with `1` in its lower triangle. Unlike a linear layer's learnable bias, it is not updated during training. The source code creates it in `CausalSelfAttention.__init__()` using `torch.tril()` and `register_buffer()`.
+
+For `T = 4`, the mask has the following form. Row `t` is the position gathering information, and column `j` is the source position. The diagonal also contains `1`, allowing each position to attend to itself.
+
+```text
+1 0 0 0
+1 1 0 0
+1 1 1 0
+1 1 1 1
+```
+
+`masked_fill()` replaces scores where the mask is `0`, corresponding to `j > t`, with `−∞`. Softmax then exponentiates each row's scores and normalizes them by dividing by their sum:
+
+$$
+A_{t,j} =
+\begin{cases}
+\displaystyle\frac{\exp(s_{t,j})}{\sum_{r=0}^{t}\exp(s_{t,r})} & j \le t \\
+0 & j > t
+\end{cases}
+$$
+
+Because `exp(−∞) = 0`, future positions receive zero weight. In the code, `dim=-1` specifies that softmax is computed along the source-position axis `j`.
+
+Each position now assigns nonnegative weights summing to `1` to itself and earlier positions. These are the **weights used to aggregate values**.
+
+## Aggregate values and produce the output
+
+In the source code, the variable `att`, which held scores, contains attention weights after softmax. These weights multiply the values to aggregate information from each position:
+
+```python
+att = self.attn_dropout(att)
+y = att @ v
+```
+
+This chapter uses `dropout = 0.0` and evaluation mode, so the attention weights pass through unchanged. When dropout is active during training, row sums after dropout can differ from `1`.
+
+```text
+att        [B, 1, T, T]
+v          [B, 1, T, C]
+att @ v    [B, 1, T, C]
+```
+
+This is the weighted sum of vectors from the opening example. Position `0` can only attend to itself, so its weights are `[1, 0, …]` and its aggregated value equals the value vector at position `0`. Position `t` combines the first `t+1` vectors.
+
+Finally, the code swaps the head and position axes and applies an output transformation:
+
+```python
+y = y.transpose(1, 2).contiguous().view(B, T, C)
+y = self.resid_dropout(self.c_proj(y))
+return y
+```
+
+`transpose()` and `view()` restore the shape to `[B, T, C]`. `contiguous()` arranges the transposed array in contiguous memory suitable for the following `view()`.
+
+Next, `c_proj` is an `nn.Linear(C, C)` layer that linearly transforms the aggregated vector to produce the output added to the original representation. Its weights and bias (when enabled) are learned as well. With one head, as in this chapter, this transformation can be absorbed into the linear transformation that produces values, so it does not fundamentally increase expressive power. With multiple heads, it learns how to combine the information gathered by each head and map it into the components of the original representation. The next chapter examines this in detail.
+
+This completes the attention module's computation. Its return value has shape `[B, T, C]` and is added to the original `x` in `Block.forward()`. This adds information gathered from the current and earlier positions to each position's representation.
+
+## Additional detail: the optimized computation path
+
+The query–key dot products, scaling, causal masking, softmax, dropout, and value aggregation examined above follow the [`else` branch of `CausalSelfAttention.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L65-L71), which computes each stage explicitly.
+
+The `if self.flash:` branch of the same method performs these computations together with the following function:
+
+```python
+y = torch.nn.functional.scaled_dot_product_attention(
+    q, k, v, attn_mask=None,
+    dropout_p=self.dropout if self.training else 0,
+    is_causal=True,
+)
+```
+
+`scaled_dot_product_attention()` computes scores from queries and keys, applies scaling, masking, softmax, and dropout when needed, and computes the weighted sum of values. `is_causal=True` restricts access to future positions. The returned `y` contains the aggregated vectors; the attention weights themselves are not returned.
+
+PyTorch selects an implementation based on the execution environment. nanoGPT's `self.flash` checks whether this function is available; it does not specify a particular computation kernel.
+
+## Verify the complete computation in code
+
+Finally, we reproduce the computations in code and compare the result with the source attention module's output. We also change past and future tokens to examine how the causal mask controls information flow.
+
+Run the following code from the directory containing `model.py` at the pinned commit. It uses a small, untrained nanoGPT with `dropout=0.0` in evaluation mode.
+
+```python
+import math
+import torch
+from torch.nn import functional as F
+from model import GPT, GPTConfig
+
+torch.manual_seed(42)
+model = GPT(GPTConfig(
+    vocab_size=5, block_size=8, n_embd=3,
+    n_layer=1, n_head=1, dropout=0.0, bias=True,
+)).eval()
+block = model.transformer.h[0]
+
+@torch.no_grad()
+def inspect(ids, causal=True):
+    idx = torch.tensor([ids])
+    B, T = idx.shape
+    C = model.config.n_embd
+
+    embedding = model.transformer.wte(idx) + model.transformer.wpe(torch.arange(T))
+    x = block.ln_1(embedding)
+
+    q, k, v = block.attn.c_attn(x).split(C, dim=2)
+    q, k, v = [a.view(B, T, 1, C).transpose(1, 2) for a in (q, k, v)]
+
+    scores = (q @ k.transpose(-2, -1)) / math.sqrt(C)
+    if causal:
+        mask = torch.ones(T, T, dtype=torch.bool).tril()
+        scores = scores.masked_fill(~mask, float('-inf'))
+
+    weights = F.softmax(scores, dim=-1)
+    u = weights @ v
+    out = block.attn.c_proj(u.transpose(1, 2).contiguous().view(B, T, C))
+
+    if causal:
+        torch.testing.assert_close(out, block.attn(x), rtol=1e-5, atol=1e-7)
+
+    return embedding, weights, out
+
+original = [2, 1, 3, 3, 4, 0]
+past = [4, 1, 3, 3, 4, 0]
+future = [2, 1, 3, 3, 1, 0]
+
+embedding, weights, out = inspect(original)
+past_embedding, _, past_out = inspect(past)
+_, _, future_out = inspect(future)
+_, _, unmasked = inspect(original, causal=False)
+_, _, unmasked_future = inspect(future, causal=False)
+
+print(list(weights.shape), list(out.shape))
+print(
+    torch.equal(embedding[:, 3], past_embedding[:, 3]),
+    not torch.equal(out[:, 3], past_out[:, 3]),
+)
+print(torch.equal(out[:, :4], future_out[:, :4]))
+print(not torch.equal(unmasked[:, 3], unmasked_future[:, 3]))
+```
+
+`inspect()` computes each stage separately, from creating Q, K, and V through value aggregation and `c_proj`. With the causal mask enabled, `assert_close()` also checks numerical agreement with the attention module's output.
+
+After the parameter count printed during model construction, the generation environment produced:
+
+```text
+[1, 1, 6, 6] [1, 6, 3]
+True True
+True
+True
+```
+
+The first line shows the shapes of the attention weights and attention output. The following `True True` shows that changing a past token preserves the embedding at position `3` while changing the attention output.
+
+The `True` on the third line shows that changing future position `4` leaves the outputs at earlier positions `0` through `3` unchanged. The final `True` shows that removing the causal mask allows the future change to affect the output at position `3`.
+
+## Next chapter
+
+The embeddings from the previous chapter depended only on the token and position at each location. Self-attention computes input-dependent attention weights from queries and keys, then uses those weights to aggregate values. The causal mask restricts each position to itself and earlier positions. Passing the result through `c_proj` and adding it to the original array incorporates contextual information into each position's representation.
+
+This chapter followed the computation with one head. The next chapter covers multi-head attention, where multiple heads each aggregate information and their outputs are combined.

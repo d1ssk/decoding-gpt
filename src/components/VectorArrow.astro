@@ -1,0 +1,134 @@
+---
+import { vectorExtent } from '../lib/weighted-vectors';
+interface Props {
+  id: string;
+  vector: number[];
+  color: string;
+  label: string;
+  name?: string;
+  extent?: number;
+  overlay?: { vector: number[]; color: string; name: string };
+  dashed?: boolean;
+}
+const {
+  id,
+  vector,
+  color,
+  label,
+  name,
+  extent = vectorExtent,
+  overlay,
+  dashed = false,
+} = Astro.props;
+const point = (values: number[]) => ({
+  x: 80 + (60 / extent) * values[0],
+  y: 80 - (60 / extent) * values[1],
+});
+const end = point(vector);
+const overlayEnd = overlay && point(overlay.vector);
+const grid = [-1, 1].map((value) => (60 / extent) * value);
+---
+
+<svg viewBox="0 0 160 160" role="img" aria-label={label}>
+  <defs>
+    <marker
+      id={id}
+      viewBox="0 0 10 10"
+      refX="9"
+      refY="5"
+      markerWidth="8"
+      markerHeight="8"
+      markerUnits="userSpaceOnUse"
+      orient="auto"
+    >
+      <path d="M 0 0 L 10 5 L 0 10 z" fill={color} />
+    </marker>
+    {overlay && (
+      <marker
+        id={`${id}-overlay`}
+        viewBox="0 0 10 10"
+        refX="9"
+        refY="5"
+        markerWidth="8"
+        markerHeight="8"
+        markerUnits="userSpaceOnUse"
+        orient="auto"
+      >
+        <path d="M 0 0 L 10 5 L 0 10 z" fill={overlay.color} />
+      </marker>
+    )}
+  </defs>
+  {grid.map((offset) => (
+    <>
+      <path d={`M ${80 + offset} 20 V 140`} class="grid-line" />
+      <path d={`M 20 ${80 + offset} H 140`} class="grid-line" />
+    </>
+  ))}
+  <path d="M 12 80 H 148 M 80 148 V 20" class="axis" />
+  {name && (
+    <text data-vector-name x="16" y="15" fill={color} class="name">
+      {name}
+    </text>
+  )}
+  {overlay && (
+    <text x="144" y="15" text-anchor="end" fill={overlay.color} class="name">
+      {overlay.name}
+    </text>
+  )}
+  <text x="145" y="73" class="axis-label">
+    c₀
+  </text>
+  <text x="87" y="22" class="axis-label">
+    c₁
+  </text>
+  <line
+    data-vector-line
+    x1="80"
+    y1="80"
+    x2={end.x}
+    y2={end.y}
+    stroke={color}
+    stroke-width="3"
+    stroke-dasharray={dashed ? '7 4' : undefined}
+    marker-end={`url(#${id})`}
+  />
+  {overlay && overlayEnd && (
+    <line
+      data-overlay-line
+      x1="80"
+      y1="80"
+      x2={overlayEnd.x}
+      y2={overlayEnd.y}
+      stroke={overlay.color}
+      stroke-width="3"
+      stroke-dasharray="7 4"
+      marker-end={`url(#${id}-overlay)`}
+    />
+  )}
+  <circle cx="80" cy="80" r="2" fill={color} />
+</svg>
+<style>
+  svg {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+  .axis {
+    stroke: var(--ink-muted);
+    fill: none;
+    stroke-width: 1;
+  }
+  .grid-line {
+    stroke: var(--line);
+    fill: none;
+    stroke-width: 0.7;
+  }
+  .axis-label {
+    font-size: 12px;
+    fill: var(--ink-secondary);
+  }
+  .name {
+    font-size: 16px;
+    font-weight: 600;
+  }
+</style>

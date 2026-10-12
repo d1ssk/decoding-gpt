@@ -74,7 +74,7 @@ Article pages should generally support this conceptual flow when appropriate:
 
 Do not force every article to use all headings mechanically.
 
-Avoid decorative lead sentences, taglines, and redundant summaries next to headings. Prefer headings followed directly by substantive content; do not automatically display metadata descriptions below article titles. Use standard, concrete wording instead of metaphors such as a codebase “map.” In Japanese articles and navigation, use `self attention` and `multi-head attention`, not `自己注意` or `マルチヘッド注意`.
+Avoid decorative lead sentences, taglines, and redundant summaries next to headings. Prefer headings followed directly by substantive content; do not automatically display metadata descriptions below article titles. Use standard, concrete wording instead of metaphors such as a codebase “map.” In Japanese articles and navigation, use `self-attention` and `multi-head attention`, not `自己注意` or `マルチヘッド注意`.
 
 ## Experiments and generated data
 

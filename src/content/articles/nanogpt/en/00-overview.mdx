@@ -102,12 +102,12 @@ Read `model.py` to inspect the computation inside `model(X, Y)`, and `train.py` 
 
 The model receives a sequence of token IDs. A `prepare.py` script tokenizes text and converts it into those integers.
 
-The character-level [`data/shakespeare_char/prepare.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data/shakespeare_char/prepare.py#L19-L61) gathers the characters in the corpus, uses `stoi` to map characters to IDs, and uses `itos` for the reverse direction. Datasets that use the same BPE (Byte Pair Encoding, a method that merges frequently occurring sequences into tokens) as GPT-2 rely on `tiktoken` for that role.
+The character-level [`data/shakespeare_char/prepare.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/data/shakespeare_char/prepare.py#L19-L61) collects the unique characters in the corpus and sorts them to build the vocabulary, uses `stoi` to map characters to IDs, and uses `itos` for the reverse direction. Datasets that use the same BPE (Byte Pair Encoding, a method that merges frequently occurring sequences into tokens) as GPT-2 rely on `tiktoken` for that role.
 
 Data preparation produces three main files:
 
 - `train.bin`: the token stream used for parameter updates
-- `val.bin`: a separate token stream used to estimate loss
+- `val.bin`: a separate token stream used to estimate validation loss
 - `meta.pkl`: vocabulary size and encode/decode metadata for character data
 
 The binary files contain one long concatenated token stream. Training constructs context windows by taking slices from that stream.

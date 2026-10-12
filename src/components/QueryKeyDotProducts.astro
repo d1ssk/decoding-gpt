@@ -1,0 +1,333 @@
+---
+import VectorArrow from './VectorArrow.astro';
+import {
+  queries,
+  keys,
+  dotProducts,
+  queryWeights,
+  keyWeights,
+  queryKeyExtent,
+  queryColor,
+  keyColor,
+  formatDot,
+  queryKeyUi,
+} from '../lib/query-key-vectors';
+import { subscript, formatVector } from '../lib/weighted-vectors';
+import type { Language } from '../lib/site';
+interface Props {
+  lang: Language;
+}
+const { lang } = Astro.props;
+const ui = queryKeyUi[lang];
+const prefix = `query-key-${lang}`;
+const inputs = [
+  { kind: 'q', values: queries, color: queryColor, caption: ui.queryVectors },
+  { kind: 'k', values: keys, color: keyColor, caption: ui.keyVectors },
+];
+---
+
+<figure class="query-key" data-query-key>
+  <figcaption>{ui.caption}</figcaption>
+  <p class="instruction" id={`${prefix}-instruction`}>
+    {ui.instruction}
+  </p>
+  {inputs.map(({ kind, values, color, caption }) => (
+    <table class="inputs" data-input-kind={kind}>
+      <caption>
+        {caption} <code>{kind} [2, 1, 3, 2]</code>
+      </caption>
+      <thead>
+        <tr>
+          <th scope="col">b \ {kind === 'q' ? 't' : 'j'}</th>
+          {[0, 1, 2].map((position) => (
+            <th scope="col">{position}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {values.map((sample, b) => (
+          <tr data-sample-row={b} class:list={{ selected: b === 0 }}>
+            <th scope="row">{b}</th>
+            {sample.map((vector, position) => (
+              <td>
+                <button
+                  type="button"
+                  data-query-key-select={b}
+                  aria-pressed={b === 0}
+                  aria-label={`${ui.select}: ${kind}[${b}, 0, ${position}, :]`}
+                  aria-describedby={`${prefix}-instruction`}
+                  disabled
+                >
+                  <span class="single-plane">
+                    <VectorArrow
+                      id={`${prefix}-${kind}-${b}-${position}`}
+                      vector={vector}
+                      color={color}
+                      extent={queryKeyExtent}
+                      name={`${kind}${subscript(position)}`}
+                      dashed={kind === 'k'}
+                      label={`${kind}[${b}, 0, ${position}, :] = ${formatVector(vector)}`}
+                    />
+                  </span>
+                </button>
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  ))}
+  <p class="legend">
+    <span style={`color: ${queryColor}`}>{ui.query}</span>
+    <span style={`color: ${keyColor}`}>{ui.key}</span>
+  </p>
+  <p class="selection" role="status" aria-atomic="true">
+    {ui.sample}{' '}
+    <code>
+      b = <span data-selected-sample>0</span>
+    </code>
+  </p>
+  {queries.map((sample, b) => (
+    <div data-dot-sample={b} hidden={b !== 0}>
+      <table class="products">
+        <caption>
+          {ui.products} <code>[3, 3]</code>
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">t \ j</th>
+            {[0, 1, 2].map((j) => (
+              <th scope="col">{j}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {sample.map((query, t) => (
+            <tr>
+              <th scope="row">{t}</th>
+              {keys[b].map((key, j) => (
+                <td data-dot-cell data-t={t} data-j={j}>
+                  <div class="paired-plane">
+                    <VectorArrow
+                      id={`${prefix}-pair-${b}-${t}-${j}`}
+                      vector={query}
+                      color={queryColor}
+                      extent={queryKeyExtent}
+                      name={`q${subscript(t)}`}
+                      overlay={{
+                        vector: key,
+                        color: keyColor,
+                        name: `k${subscript(j)}`,
+                      }}
+                      label={`q${subscript(t)}: ${formatVector(query)}, k${subscript(j)}: ${formatVector(key)}`}
+                    />
+                  </div>
+                  <span
+                    class="dot-value"
+                    aria-label={`${ui.pair}: q${subscript(t)} · k${subscript(j)}`}
+                    data-dot-value
+                  >
+                    {formatDot(dotProducts[b][t][j])}
+                  </span>
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <details>
+        <summary>{ui.components}</summary>
+        <div
+          class="numeric-scroll"
+          role="region"
+          aria-label={ui.components}
+          tabindex="0"
+        >
+          <table class="numeric">
+            <thead>
+              <tr>
+                <th scope="col">t</th>
+                <th scope="col">j</th>
+                <th scope="col">q</th>
+                <th scope="col">k</th>
+                <th scope="col">q · k</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sample.flatMap((query, t) =>
+                keys[b].map((key, j) => (
+                  <tr>
+                    <th scope="row">{t}</th>
+                    <td>{j}</td>
+                    <td>{formatVector(query)}</td>
+                    <td>{formatVector(key)}</td>
+                    <td>{Number(dotProducts[b][t][j].toFixed(6))}</td>
+                  </tr>
+                )),
+              )}
+            </tbody>
+          </table>
+          <p>{ui.transformation}</p>
+          <p>
+            <code>Wq = [{queryWeights.map(formatVector).join(', ')}]</code>
+          </p>
+          <p>
+            <code>Wk = [{keyWeights.map(formatVector).join(', ')}]</code>
+          </p>
+        </div>
+      </details>
+    </div>
+  ))}
+  <noscript>
+    <p>{ui.noScript}</p>
+  </noscript>
+</figure>
+
+<script>
+  document.querySelectorAll<HTMLElement>('[data-query-key]').forEach((root) => {
+    const buttons = root.querySelectorAll<HTMLButtonElement>(
+      '[data-query-key-select]',
+    );
+    buttons.forEach((button) => {
+      button.disabled = false;
+      button.addEventListener('click', () => {
+        const sample = button.dataset.queryKeySelect!;
+        buttons.forEach((control) =>
+          control.setAttribute(
+            'aria-pressed',
+            String(control.dataset.queryKeySelect === sample),
+          ),
+        );
+        root
+          .querySelectorAll<HTMLElement>('[data-sample-row]')
+          .forEach((row) =>
+            row.classList.toggle('selected', row.dataset.sampleRow === sample),
+          );
+        root
+          .querySelectorAll<HTMLElement>('[data-dot-sample]')
+          .forEach((panel) => {
+            panel.hidden = panel.dataset.dotSample !== sample;
+          });
+        root.querySelector('[data-selected-sample]')!.textContent = sample;
+      });
+    });
+  });
+</script>
+
+<style>
+  .query-key {
+    margin: 2rem 0;
+    padding: 1.25rem 0;
+    border-block: 1px solid var(--line-strong);
+  }
+  figcaption {
+    font-weight: 600;
+    margin-bottom: 1rem;
+  }
+  .instruction,
+  .selection {
+    font-size: 0.85rem;
+  }
+  .inputs,
+  .products {
+    width: 100%;
+    max-width: 34rem;
+    table-layout: fixed;
+    margin: 1rem 0;
+  }
+  caption {
+    text-align: left;
+    font-size: 0.85rem;
+    padding-bottom: 0.5rem;
+  }
+  caption code {
+    display: inline-block;
+    margin-left: 0.5rem;
+    white-space: nowrap;
+  }
+  .inputs :is(th, td),
+  .products :is(th, td) {
+    text-align: center;
+    padding: 0;
+  }
+  .inputs th,
+  .products th {
+    color: var(--ink-muted);
+    font-size: 0.7rem;
+    font-weight: 400;
+    padding-block: 0.3rem;
+  }
+  .inputs th:first-child,
+  .products th:first-child {
+    width: 2.5rem;
+    white-space: nowrap;
+  }
+  .selected {
+    background: var(--accent-light);
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+  button {
+    display: block;
+    width: 100%;
+    border: 0;
+    padding: 0.4rem 0;
+    background: transparent;
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: default;
+  }
+  button:hover:not(:disabled) {
+    background: var(--paper-subtle);
+  }
+  button:focus-visible {
+    outline: 2px dashed var(--ink);
+    outline-offset: -3px;
+  }
+  .single-plane {
+    display: block;
+    max-width: 6rem;
+    margin-inline: auto;
+  }
+  .paired-plane {
+    max-width: 8rem;
+    margin-inline: auto;
+    padding-top: 0.4rem;
+  }
+  .dot-value {
+    display: block;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.95rem;
+    padding-bottom: 0.4rem;
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.5rem;
+    font-size: 0.8rem;
+  }
+  summary {
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  details {
+    margin-top: 1.25rem;
+  }
+  .numeric-scroll {
+    overflow-x: auto;
+    font-size: 0.8rem;
+  }
+  .numeric {
+    white-space: nowrap;
+    font-family: var(--font-mono);
+  }
+  :is(summary, .numeric-scroll):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+  [hidden] {
+    display: none;
+  }
+</style>

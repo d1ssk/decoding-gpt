@@ -189,7 +189,7 @@ GPT
 | residual stream     | $B \times T \times C$            | block 間を流れる hidden state  |
 | logits              | $B \times T \times V$            | 次 token 候補の score          |
 
-### causal self attention
+### causal self-attention
 
 [`CausalSelfAttention`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L29-L76) が受け取る入力は、各 token 位置に $C$ 次元のベクトルを持つ、shape が $B \times T \times C$ の多次元配列です。最初の Transformer block では token embedding と position embedding を足し合わせた表現を、2 層目以降では前の block の出力を使います。各 block では、その表現に LayerNorm で各 token 位置のベクトルの平均と分散を整えてから `CausalSelfAttention` へ渡します。
 
@@ -339,7 +339,7 @@ model size、batch size、learning rate、iteration 数、dropout、評価回数
 
 ### Phase 2 — forward pass を分解する
 
-第3–8章では、`GPT.forward()` を embedding、position、self attention、multi-head attention、MLP、residual stream、logits、loss へと分けて見ていきます。各段階で 多次元配列の shape、値の範囲、各軸の意味を可視化します。
+第3–8章では、`GPT.forward()` を embedding、position、self-attention、multi-head attention、MLP、residual stream、logits、loss へと分けて見ていきます。各段階で 多次元配列の shape、値の範囲、各軸の意味を可視化します。
 
 ### Phase 3 — model が学ぶ仕組みを見る
 

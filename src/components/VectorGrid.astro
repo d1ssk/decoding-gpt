@@ -1,0 +1,165 @@
+---
+import VectorArrow from './VectorArrow.astro';
+import {
+  exampleInputs,
+  exampleValues,
+  exampleOutputs,
+  vectorColors,
+  inputColor,
+  resultColor,
+  vectorExampleUi,
+} from '../lib/weighted-vectors';
+import type { Language } from '../lib/site';
+interface Props {
+  kind: 'x' | 'v' | 'y';
+  lang: Language;
+  prefix: string;
+  selectedB: number;
+  selectedT: number;
+}
+const { kind, lang, prefix, selectedB, selectedT } = Astro.props;
+const ui = vectorExampleUi[lang];
+const arrays = { x: exampleInputs, v: exampleValues, y: exampleOutputs };
+const title = { x: ui.inputs, v: ui.values, y: ui.outputs }[kind];
+const description = { x: ui.input, v: ui.source, y: ui.result }[kind];
+---
+
+<div class="vector-array" data-stage={kind}>
+  <table>
+    <caption>
+      {title}
+      <code>
+        {kind} {kind === 'x' ? '[2, 3, 2]' : '[2, 1, 3, 2]'}
+      </code>
+    </caption>
+    <thead>
+      <tr>
+        <th scope="col">b \ {kind === 'v' ? 'j' : 't'}</th>
+        {[0, 1, 2].map((j) => (
+          <th scope="col">{j}</th>
+        ))}
+      </tr>
+    </thead>
+    <tbody>
+      {arrays[kind].map((row, b) => (
+        <tr>
+          <th scope="row">{b}</th>
+          {row.map((vector, position) => (
+            <td
+              data-vector-cell
+              data-kind={kind}
+              data-b={b}
+              data-t={position}
+              class:list={{
+                'selected-source': kind === 'v' && b === selectedB,
+                'selected-position':
+                  kind !== 'x' && b === selectedB && position === selectedT,
+              }}
+            >
+              {kind === 'x' ? (
+                <button
+                  type="button"
+                  data-input
+                  data-b={b}
+                  data-t={position}
+                  aria-pressed={b === selectedB && position === selectedT}
+                  aria-label={`${ui.selectInput}: x[${b}, ${position}, :]`}
+                  aria-describedby={`${prefix}-instruction`}
+                  disabled
+                >
+                  <span class="cell-vector">
+                    <VectorArrow
+                      id={`${prefix}-x-${b}-${position}`}
+                      vector={vector}
+                      color={inputColor}
+                      label={`x[${b}, ${position}, :]: ${description}`}
+                    />
+                  </span>
+                </button>
+              ) : (
+                <div class="cell-vector">
+                  <VectorArrow
+                    id={`${prefix}-${kind}-${b}-${position}`}
+                    vector={vector}
+                    color={kind === 'v' ? vectorColors[position] : resultColor}
+                    label={`${kind}[${b}, 0, ${position}, :]: ${description}`}
+                  />
+                </div>
+              )}
+            </td>
+          ))}
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
+<style>
+  .vector-array {
+    margin: 1.25rem 0;
+  }
+  table {
+    width: 100%;
+    max-width: 34rem;
+    table-layout: fixed;
+    margin: 0;
+  }
+  caption {
+    text-align: left;
+    font-size: 0.85rem;
+    padding-bottom: 0.5rem;
+  }
+  caption code {
+    margin-left: 0.65rem;
+    white-space: nowrap;
+    display: inline-block;
+  }
+  :is(th, td) {
+    padding: 0;
+    text-align: center;
+  }
+  th {
+    padding-block: 0.25rem;
+    color: var(--ink-muted);
+    font-size: 0.7rem;
+    font-weight: 400;
+  }
+  th:first-child {
+    width: 2.5rem;
+  }
+  .cell-vector {
+    display: block;
+    max-width: 6rem;
+    margin-inline: auto;
+  }
+  button {
+    display: block;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: default;
+  }
+  button[aria-pressed='true'],
+  .selected-position {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    background: var(--accent-light);
+  }
+  button:hover:not(:disabled):not([aria-pressed='true']) {
+    background: var(--paper-subtle);
+  }
+  button:focus-visible {
+    outline: 2px dashed var(--ink);
+    outline-offset: -3px;
+  }
+  .selected-source:not(.selected-position) {
+    background: var(--paper-subtle);
+    box-shadow: inset 0 -2px var(--accent);
+  }
+  .dimmed .cell-vector {
+    opacity: 0.3;
+  }
+</style>

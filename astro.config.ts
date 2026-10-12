@@ -12,6 +12,18 @@ export default defineConfig({
   output: 'static',
   trailingSlash: 'always',
   integrations: [mdx(), react(), sitemap()],
+  vite: {
+    plugins: [
+      {
+        name: 'separate-mode-cache',
+        // Content sync during a build also optimizes dependencies. Keep it
+        // from replacing the React development runtime of a running server.
+        config: (_config, { mode }) => ({
+          cacheDir: `node_modules/.vite/${mode}`,
+        }),
+      },
+    ],
+  },
   markdown: {
     syntaxHighlight: 'shiki',
     shikiConfig: {

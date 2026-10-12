@@ -16,6 +16,12 @@ npm run build
 npm run preview
 ```
 
+Vite dependency caches are separated by mode in `astro.config.ts`. Astro's
+content sync during a production build can optimize React dependencies while
+the development server is running. Separate caches prevent the production JSX
+runtime from replacing the development runtime and causing `jsxDEV is not a
+function` during hydration.
+
 ## Structure
 
 ```text
@@ -164,6 +170,59 @@ the origin to the token tip.
 The sum stays fixed during translation. Numeric tables and the initial SVG also
 render without JavaScript. This uses SVG and pointer events with no plotting
 dependency or external runtime service.
+
+## Self-attention example
+
+Chapter 04 follows one head in the same initialized model as Chapter 03. Generate
+its small, fixed input comparisons with PyTorch 2.8.0 on CPU:
+
+```bash
+python experiments/nanogpt/self_attention.py /path/to/nanoGPT/model.py
+npx prettier --write public/site/data/nanogpt/self-attention.json
+```
+
+The generator verifies the pinned source SHA-256 before importing it. The artifact
+records configuration, environment, source provenance, and intermediate arrays for
+the original input and two single-token changes (past and future relative to
+position 3). Each input has causal and unmasked computations; the unmasked mode
+is an educational intervention, not normal nanoGPT inference. No checkpoint is
+saved. The hand-set opening example is separate from these untrained-model data.
+
+Checks compare manual aggregation with PyTorch scaled dot product attention in
+both modes and compare causal projected outputs with the actual nanoGPT module.
+They cover lengths 1, 3, 6, and 8, normalized attention rows, zero future weights,
+the first position's identity aggregation, and invariance of the causal prefix
+when a future token changes. The generator also checks that a past change affects
+the selected output and that a future change affects it when masking is removed.
+
+The opening weighted-sum example in `WeightedVectorSum.astro` is an independent
+illustration with two samples, three positions, and two components. In
+`src/lib/weighted-vectors.ts`, a fixed seed (29) generates signed input vectors
+and shared linear transformation weights. Applying those weights with zero bias
+produces `v`; hand-set causal attention coefficients produce `y = att @ v`.
+The singleton head axis is omitted only in the `v`, `att`, and `y` fixture arrays.
+The UI shows full shapes and fixes the head index to zero.
+
+`VectorGrid.astro` renders `x`, `v`, and `y` as grids of SVG arrows from
+`VectorArrow.astro`, with centered origins and a shared symmetric scale.
+Selecting one of six cells in `x` highlights the corresponding positions in
+`v` and `y`, the source sample, and the attention row. The display follows
+`x`, `v`, `att`, the weighted-vector equation, and finally `y`. Position indices
+in `att` are smaller and lighter than the coefficient entries. A component
+disclosure includes the selected input, numeric weighted sum, and value weights.
+All arrays remain fixed; interaction chooses which computed output to inspect.
+The initial state and native `details` element work without JavaScript. A small
+Astro script handles selection without new dependencies.
+
+`QueryKeyDotProducts.astro` adds an independent query–key illustration to chapter 04. `src/lib/query-key-vectors.ts` applies two documented linear transformations
+to the weighted-sum example's seeded inputs, then computes every signed dot
+product. Separate `B × T` grids show queries and keys; selecting any cell in either
+grid highlights the corresponding sample row in both. The lower `T × T` grid overlays
+`q_t` and `k_j` and shows their raw dot product, before scaling or masking.
+Both samples are rendered statically, and a small script switches the visible
+sample. A component disclosure shows numeric vectors, dot products, and weights.
+The no-JavaScript fallback shows sample zero. `VectorArrow.astro` supports a
+shared extent and an optional dashed second vector for these pair plots.
 
 ## Sitemaps
 

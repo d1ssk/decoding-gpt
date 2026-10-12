@@ -103,7 +103,7 @@ During training, batches from `train.bin` are passed to the model, and the predi
 
 Validation uses batches of the same shape from `val.bin` to calculate the loss, while leaving the weights unchanged. The losses from several batches are averaged to evaluate prediction performance on data that was not used for training.
 
-Here, `batch_size` is the number of token sequences processed in one forward pass. nanoGPT can also accumulate gradients from several batches before performing a single weight update. The training-loop chapter will cover weight updates and how training and validation are organized.
+Here, `batch_size` is the number of token sequences passed to the model in one forward pass. Training can accumulate gradients computed over several batches before updating the weights once. As a result, `batch_size` does not necessarily equal the total number of token sequences used for one weight update. The training-loop chapter will cover gradient accumulation, weight updates, and how training and validation are organized.
 
 ## In the next chapter
 

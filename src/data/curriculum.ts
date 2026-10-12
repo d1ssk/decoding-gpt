@@ -38,8 +38,8 @@ export const nanoGptChapters: Chapter[] = [
   {
     order: 4,
     slug: '04-self-attention',
-    title: { ja: 'self attention', en: 'Self-Attention' },
-    published: false,
+    title: { ja: 'self-attention', en: 'Self-Attention' },
+    published: true,
   },
   {
     order: 5,

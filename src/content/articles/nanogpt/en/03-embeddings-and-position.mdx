@@ -21,9 +21,9 @@ import EmbeddingInspector from '../../../../components/EmbeddingInspector.astro'
 
 The input `X` created in the previous chapter is an array that represents each token with an integer called a **token ID**. An ID serves to distinguish one token from another. For example, although IDs `3` and `4` are numerically close, their tokens may differ in meaning and usage.
 
-GPT therefore associates each token ID with a vector of `C` numbers, called a **token embedding**. The vector's components are stored as model weights and updated during training. Through these updates, the model develops representations useful for predicting the next token.
+Neural language models such as nanoGPT therefore associate each token ID with a vector of `C` numbers, called a **token embedding**. The vector's components are stored as model weights and updated during training. Through these updates, the model develops representations useful for predicting the next token.
 
-To represent where a token appears in the input sequence, the model also provides a separate vector called a **position embedding**. Its values are updated during training as well. nanoGPT adds the token and position embeddings to represent each position with a `C`-dimensional vector.
+To represent where a token appears in the input sequence, the model also provides a separate vector called a **position embedding**. Its values are updated during training as well. Adding the token and position embeddings represents each position with a `C`-dimensional vector.
 
 At this stage, the vector is determined by the token at that position and its position index. Information from preceding tokens is incorporated in the subsequent Transformer blocks.
 

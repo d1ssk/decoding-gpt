@@ -1,0 +1,357 @@
+---
+title: 'self-attention'
+description: 'ベクトルの重み付き和から始めて、入力に応じた参照の重みを nanoGPT の query・key・value、causal mask、softmax とコードで追う。'
+order: 4
+series: nanogpt
+lang: ja
+translationKey: nanogpt-04-self-attention
+slug: 04-self-attention
+draft: false
+upstream:
+  repository: karpathy/nanoGPT
+  commit: 3adf61e154c3fe3fca428ad6bc3818b27a3b8291
+  sourceFiles:
+    - model.py
+experimentId: nanogpt-04-self-attention
+---
+
+import WeightedVectorSum from '../../../../components/WeightedVectorSum.astro';
+import QueryKeyDotProducts from '../../../../components/QueryKeyDotProducts.astro';
+
+## 埋め込みから文脈に応じた表現へ
+
+前章では、トークン埋め込みと位置埋め込みを足し、形状 `[B, T, C]` の配列を作りました。この段階では、各位置のベクトルはそのトークンと位置だけで決まります。同じ位置に同じトークンがあれば、それ以前のトークン列が異なっていてもベクトルは一致します。
+
+文章の続きを予測するには、それまでに現れたトークンの情報を取り込む必要があります。その役割を担うのが **self-attention** です。各位置がほかの位置から情報を集める際に、**どの位置をどれだけ参照するかを、入力に応じて計算する**ことが特徴です。
+
+nanoGPT は、参照先を自分自身とそれ以前の位置に制限する _causal self-attention_ を使います。この章では、まず 1 つの attention head の計算を追います。`B` はバッチサイズ、`T` は入力長、`C` は各位置のベクトルの成分数です。
+
+埋め込みから作った配列 `x` は、最初の Transformer block に渡されます。[`model.py` の `Block.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L94-L106) では、次の行で attention の計算を呼び出しています。
+
+```python
+x = x + self.attn(self.ln_1(x))
+```
+
+`self.ln_1(x)` で各位置のベクトルを正規化し、その配列を `self.attn` に渡します。`self.attn` は、`Block.__init__()` で作られた `CausalSelfAttention` のインスタンスです。呼び出し先の `CausalSelfAttention.forward(self, x)` は、渡された配列を引数 `x` として受け取ります。**以降、この関数内の入力を `x` と表記します。** `Block.forward()` の `x` は正規化前、attention 内の `x` は正規化後の値です。
+
+**この章で詳しく読むのは、`self.attn` の内部です。** 以降に出てくる query・key・value、参照の重み、ベクトルの重み付き和は、すべてこの呼び出しの中で行う計算です。
+
+attention は形状 `[B, T, C]` の配列を受け取り、同じ形状の配列を返します。その各位置には、自分自身とそれ以前の位置から集めた情報が入ります。`Block.forward()` では、この返り値を元の `x` に加えます。これが残差接続です。LayerNorm と残差接続の詳しい仕組みは第 6 章で扱います。
+
+次の節では、`CausalSelfAttention.forward()` の後半にある集約のコードから読み始めます。配列の構造とベクトル図でその計算を確かめた後、集約に使うベクトルと参照の重みを入力からどう作るかを追います。
+
+## ベクトルを重み付きで足す
+
+前節で見た `self.attn` の内部、`CausalSelfAttention.forward()` を読んでいきます。まず、関数の後半にある**各位置の情報を集約するステップ**に注目します。参照元の明示的な計算経路では、次の一行がその処理です。
+
+```python
+y = att @ v
+```
+
+`v` は、各位置から取り込む情報をベクトルとして並べた配列です。`att` は、各位置の出力を作る際に、それぞれのベクトルへ掛ける係数を並べた配列です。`att @ v` は、この係数でベクトルを重み付きで足し合わせ、結果を `y` に格納します。
+
+この `y` は集約直後の値です。この後に head 軸を戻す処理と出力の線形変換 `c_proj` などを経て、`CausalSelfAttention.forward()` の返り値になります。まずは `att` と `v` が用意されているとして、この一行でどのような計算が行われるかを見ていきます。
+
+### 配列の形状
+
+この章では `n_head = 1` として、次の形状の配列を扱います。
+
+```text
+att        [B, 1, T, T]
+v          [B, 1, T, C]
+y          [B, 1, T, C]
+```
+
+`B` はバッチサイズ、`1` は head 数、`T` は入力列の長さ、`C` は各ベクトルの成分数です。
+
+`v` と `y` は、**各マスに `C` 成分のベクトルが入った、`B` 行・`T` 列の配列**です。行はサンプル、列は入力列内の位置に対応します。head は 1 つに固定しているので、図ではその軸を省略します。
+
+`att` には、各バッチサンプルについて `T × T` 個の係数があります。**行 `t` は出力を計算する位置、列 `j` は参照先の位置**です。出力位置 `t` の計算では、同じサンプルの `att` から行 `t` を取り出し、その係数を `v` の各ベクトルに掛けて足します。
+
+### 入力の位置から計算をたどる
+
+次の図は、`B = 2`、`T = 3`、`C = 2` の例です。まず、attention が受け取る入力 `x` を `[B, T, C]` の配列として並べています。
+
+入力と線形変換の重みは seed を固定した乱数から作り、各位置の入力に共通の線形変換を適用して `v` を求めています。`att` の係数は説明用に適当に設定し、`y` は `att @ v` で計算しています。
+
+**`x` のマスを選んでください。** 上から `x`、`v`、`att`、「係数 × ベクトル」の計算、`y` の順にたどれます。選択した位置と、計算に使う `v` の行・`att` の行がハイライトされます。
+
+<WeightedVectorSum lang="ja" />
+
+例えば、サンプル `b` の位置 `t` を選んだとき、取り出している配列は次のとおりです。
+
+```text
+att[b, 0, t, :]    [T]      出力位置 t に使う係数
+v[b, 0, :, :]      [T, C]   同じサンプルの各位置のベクトル
+y[b, 0, t, :]      [C]      重み付きで足し合わせた出力
+```
+
+`@` は、参照先 `j` に沿って積を足します。成分 `c` について書くと、次の計算です。$A$ はコードの `att` を表します。
+
+$$
+y_{b,0,t,c} = \sum_{j=0}^{T-1} A_{b,0,t,j}v_{b,0,j,c}
+$$
+
+`y = att @ v` は、この計算をすべての出力位置についてまとめて行い、形状 `[B, 1, T, C]` の `y` を作ります。各サンプル・各 head の計算は独立しています。
+
+この例では `att` の係数を用意して計算しました。実際の self-attention では、**足し合わせるベクトルも参照の重みも、入力から作ります。** 次の節では、そのための query・key・value を見ていきます。
+
+## query・key・value を作る
+
+self-attention は、同じ入力 `x` から役割の異なる 3 つの配列を作ります。異なる 3 種類の線形変換を各位置のベクトルに適用し、変換ごとの結果を並べたものが query・key・value です。
+
+| 配列       | 役割                                                              |
+| ---------- | ----------------------------------------------------------------- |
+| query：`q` | 情報を集める位置から作り、各 key と照合して参照先のスコアを求める |
+| key：`k`   | 参照される位置から作り、query と照合される                        |
+| value：`v` | query と key で決まる重みで足し合わされ、出力に取り込まれる       |
+
+位置 `t` の query と位置 `j` の key の内積から、`t` が `j` をどれだけ参照するかのスコアを求めます。このスコアを重みに変換し、各位置の value に掛けて足し合わせることで、位置 `t` の出力を計算します。query・key・value をすべて同じ入力列から作ることが、_self_-attention の「self」に対応します。
+
+### `nn.Linear` で各位置のベクトルを変換する
+
+前章の `nn.Embedding` は、ID に対応する埋め込みベクトルを取り出しました。一方、ここで使う `nn.Linear` は、入力ベクトルに線形変換を施し、新しいベクトルを作ります。
+
+`nn.Linear(C, D)` は、`C` 成分の入力ベクトルを `D` 成分の出力ベクトルに変換します。重み `weight` の形状は `[D, C]` で、bias を使う場合は `[D]` の加算項を持ちます。bias の成分を $\beta_r$ とすると、サンプル `b` の位置 `t` における出力の成分 `r` は、
+
+$$
+o_{b,t,r} = \sum_{c=0}^{C-1} W_{r,c}x_{b,t,c} + \beta_r
+$$
+
+と計算されます。**同じ重みと bias をすべての位置・バッチで使う**ため、この変換では各位置のベクトルを独立に処理します。
+
+nanoGPT の [`CausalSelfAttention.__init__()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L29-L51) では、Q・K・V の 3 種類の線形変換を 1 つの `nn.Linear` にまとめています。
+
+```python
+self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+```
+
+`CausalSelfAttention.forward()` では、変換結果を 3 つに分割します。
+
+```python
+q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
+```
+
+入力 `x` の形状 `[B, T, C]` は、`c_attn` によって `[B, T, 3C]` になり、`split()` によってそれぞれ `[B, T, C]` の `q`・`k`・`v` に分かれます。
+
+Q・K・V の変換はそれぞれ異なる学習可能な重みを持ちますが、それらを 1 つの層にまとめて計算しています。この章のモデルは `bias=True` ですが、`False` の場合は加算項を省きます。
+
+### head ごとの形状に並べ替える
+
+続いて、`q`・`k`・`v` を attention head ごとに分けます。
+
+```python
+k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+```
+
+この章では `n_head = 1` なので、形状は `[B, T, C]` → `[B, T, 1, C]` → `[B, 1, T, C]` と変わります。`view()` は軸を分割し、`transpose(1, 2)` は位置軸と head 軸を入れ替えます。
+
+一般に、head 数を `H`、head ごとの成分数を `d = C/H` とすると、`q`・`k`・`v` の形状は `[B, H, T, d]` になります。各 head は、それぞれの query・key・value を使って参照の重みを求め、value の加重和を計算します。この章では head を 1 つに固定して、この一連の計算を追います。複数の head の出力を組み合わせる仕組みは次章で扱います。
+
+## query と key の内積からスコアを求める
+
+各位置の query と key ができたので、参照先ごとのスコアを計算します。参照元リポジトリの明示的な計算経路では、次の一行がそれを行います。
+
+```python
+att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+```
+
+`transpose(-2, -1)` は最後の 2 軸を交換します。1 head では、
+
+```text
+q                         [B, 1, T, C]
+k.transpose(-2, -1)       [B, 1, C, T]
+q @ k.transpose(-2, -1)   [B, 1, T, T]
+```
+
+となります。最後の 2 軸では、**行 `t` が出力を計算する位置、列 `j` が参照先**です。各要素は、位置 `t` の query と位置 `j` の key の内積から計算します。
+
+$$
+s_{t,j}
+= \frac{\boldsymbol{q}_t \cdot \boldsymbol{k}_j}{\sqrt{d}}
+= \frac{\sum_{c=0}^{d-1}q_{t,c}k_{j,c}}{\sqrt{d}}
+$$
+
+この章では `d = C` です。内積は成分数が大きいほど値のばらつきが大きくなりやすいため、`√d` で割ってスケールを調整します。これにより、次の softmax で重みが極端に偏りやすくなることを抑えます。
+
+スコアが大きい参照先ほど、大きな重みが割り当てられます。どの組み合わせのスコアが高くなるかは、学習された Q・K の変換によって決まります。また、一般に `s[t, j]` と `s[j, t]` は一致しません。
+
+次の図は、`B = 2`、`T = 3`、`C = 2` の説明用の例です。前の図と同じ入力 `x` に、query 用と key 用の異なる線形変換を適用してベクトルを作っています。query と key は、それぞれ `B × T` の表に並べています。
+
+どちらかの表でサンプル `b` を選ぶと、両方の表の同じ行が強調され、下の `T × T` の表に、そのサンプルのすべての組み合わせが表示されます。マス `(t, j)` では query `qₜ` と key `kⱼ` を同じ平面に重ね、その下に内積の値を表示します。数値は `√2` で割る前の値です。
+
+<QueryKeyDotProducts lang="ja" />
+
+## causal mask と softmax
+
+nanoGPT のような自己回帰型の言語モデルでは、位置 `t` までのトークンから次のトークンを予測します。学習時には入力列全体をまとめて処理するため、各位置が未来のトークンを参照すると、予測対象の情報を先取りできてしまいます。そこで、各位置の参照先を自分自身とそれ以前の位置に制限します。この制限を実現するのが _causal mask_ です。
+
+nanoGPT では、スコアに causal mask を適用した後、softmax で参照の重みを計算します。
+
+```python
+att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+att = F.softmax(att, dim=-1)
+```
+
+この `self.bias` は、下三角部分が `1` の mask を保持する buffer です。線形層の学習可能な bias とは異なり、学習によって更新されません。参照元コードでは、`CausalSelfAttention.__init__()` において `torch.tril()` と `register_buffer()` を使って用意しています。
+
+`T = 4` の場合、mask は次の形になります。行 `t` が情報を集める位置、列 `j` が参照先です。対角成分も `1` なので、各位置は自分自身を参照できます。
+
+```text
+1 0 0 0
+1 1 0 0
+1 1 1 0
+1 1 1 1
+```
+
+`masked_fill()` は、mask が `0` の位置、つまり `j > t` に対応するスコアを `−∞` に置き換えます。続く softmax は、各行のスコアを指数関数に通し、その合計で割って正規化します。
+
+$$
+A_{t,j} =
+\begin{cases}
+\displaystyle\frac{\exp(s_{t,j})}{\sum_{r=0}^{t}\exp(s_{t,r})} & j \le t \\
+0 & j > t
+\end{cases}
+$$
+
+`exp(−∞) = 0` なので、未来の位置の重みは `0` になります。コードの `dim=-1` は、参照先 `j` の軸に沿って softmax を計算するための指定です。
+
+こうして、各位置は自分自身と過去の位置に、合計 `1` の非負の重みを割り当てます。これが **value を集約するための重み**になります。
+
+## value を集約して出力する
+
+参照元コードでは、スコアを入れていた変数 `att` に、softmax 後は参照の重みが入っています。この重みを value に掛け、各位置の情報を集約します。
+
+```python
+att = self.attn_dropout(att)
+y = att @ v
+```
+
+この章は `dropout = 0.0`、評価モードなので、重みはそのまま使われます。学習時に dropout を有効にした場合、適用後の重みの行和は必ずしも `1` にはなりません。
+
+```text
+att        [B, 1, T, T]
+v          [B, 1, T, C]
+att @ v    [B, 1, T, C]
+```
+
+これが最初に見たベクトルの重み付き和です。位置 `0` が参照できるのは自分自身だけなので、その重みは `[1, 0, …]` となり、集約結果は位置 `0` の value と一致します。位置 `t` では、`t+1` 個の value を重み付きで組み合わせます。
+
+最後に、head 軸を戻して出力の線形変換を適用します。
+
+```python
+y = y.transpose(1, 2).contiguous().view(B, T, C)
+y = self.resid_dropout(self.c_proj(y))
+return y
+```
+
+`transpose()` と `view()` で形状を `[B, T, C]` に戻します。`contiguous()` は、`view()` できるようにメモリ配置を整える操作です。
+
+続く `c_proj` は `nn.Linear(C, C)` で、集約したベクトルを線形変換し、元の表現に加える出力を作ります。この変換の重みと bias（有効な場合）も学習されます。この章のように head が 1 つの場合は、この変換は value を作る線形変換に吸収できるため、表現力を本質的には増やしません。一方、複数の head を使う場合には、各 head が集めた情報を組み合わせ、元の表現の各成分にどう反映するかを学習する役割があります。詳しくは次章で扱います。
+
+ここまでが attention モジュールの計算です。返り値は `[B, T, C]` で、`Block.forward()` に戻ると元の `x` に足されます。これにより、各位置の表現に、自分自身と過去の位置から集めた情報が加わります。
+
+## 補足：高速化された計算経路
+
+ここまで追ってきた query と key の内積、スケーリング、causal mask、softmax、dropout、value の集約は、[`CausalSelfAttention.forward()` の `else` 側](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L65-L71) にある、各段階を明示的に計算する実装です。
+
+同じ関数の `if self.flash:` 側では、これらの計算を次の関数でまとめて実行します。
+
+```python
+y = torch.nn.functional.scaled_dot_product_attention(
+    q, k, v, attn_mask=None,
+    dropout_p=self.dropout if self.training else 0,
+    is_causal=True,
+)
+```
+
+`scaled_dot_product_attention()` は、query と key からスコアを求め、スケーリング、mask、softmax、必要に応じた dropout を適用し、value の加重和まで計算します。`is_causal=True` は未来の位置への参照を制限する指定です。返り値 `y` は集約後のベクトルで、参照の重みそのものは返しません。
+
+PyTorch は実行環境に応じて計算方法を選択します。nanoGPT の `self.flash` は、この関数が利用できるかどうかを判定するもので、特定の計算カーネルを指定するものではありません。
+
+## コードで一連の計算を確かめる
+
+最後に、ここまでの計算をコードで再現し、参照元の attention モジュールの出力と比較します。また、過去と未来のトークンを変更し、causal mask による情報の流れを確かめます。
+
+次のコードは、固定コミットの `model.py` と同じディレクトリで実行できます。学習前の小さな nanoGPT を使い、`dropout=0.0`、評価モードで計算します。
+
+```python
+import math
+import torch
+from torch.nn import functional as F
+from model import GPT, GPTConfig
+
+torch.manual_seed(42)
+model = GPT(GPTConfig(
+    vocab_size=5, block_size=8, n_embd=3,
+    n_layer=1, n_head=1, dropout=0.0, bias=True,
+)).eval()
+block = model.transformer.h[0]
+
+@torch.no_grad()
+def inspect(ids, causal=True):
+    idx = torch.tensor([ids])
+    B, T = idx.shape
+    C = model.config.n_embd
+
+    embedding = model.transformer.wte(idx) + model.transformer.wpe(torch.arange(T))
+    x = block.ln_1(embedding)
+
+    q, k, v = block.attn.c_attn(x).split(C, dim=2)
+    q, k, v = [a.view(B, T, 1, C).transpose(1, 2) for a in (q, k, v)]
+
+    scores = (q @ k.transpose(-2, -1)) / math.sqrt(C)
+    if causal:
+        mask = torch.ones(T, T, dtype=torch.bool).tril()
+        scores = scores.masked_fill(~mask, float('-inf'))
+
+    weights = F.softmax(scores, dim=-1)
+    u = weights @ v
+    out = block.attn.c_proj(u.transpose(1, 2).contiguous().view(B, T, C))
+
+    if causal:
+        torch.testing.assert_close(out, block.attn(x), rtol=1e-5, atol=1e-7)
+
+    return embedding, weights, out
+
+original = [2, 1, 3, 3, 4, 0]
+past = [4, 1, 3, 3, 4, 0]
+future = [2, 1, 3, 3, 1, 0]
+
+embedding, weights, out = inspect(original)
+past_embedding, _, past_out = inspect(past)
+_, _, future_out = inspect(future)
+_, _, unmasked = inspect(original, causal=False)
+_, _, unmasked_future = inspect(future, causal=False)
+
+print(list(weights.shape), list(out.shape))
+print(
+    torch.equal(embedding[:, 3], past_embedding[:, 3]),
+    not torch.equal(out[:, 3], past_out[:, 3]),
+)
+print(torch.equal(out[:, :4], future_out[:, :4]))
+print(not torch.equal(unmasked[:, 3], unmasked_future[:, 3]))
+```
+
+`inspect()` では、Q・K・V の生成から value の集約、`c_proj` までを個別に計算しています。causal mask が有効な場合は、`assert_close()` で attention モジュールの出力との数値的一致も確認します。
+
+モデル作成時のパラメータ数の表示に続き、生成環境では次の結果が得られました。
+
+```text
+[1, 1, 6, 6] [1, 6, 3]
+True True
+True
+True
+```
+
+最初の行は、参照の重みと attention の出力の形状です。続く `True True` は、過去のトークンを変更しても位置 `3` の埋め込みは変わらず、attention の出力は変わったことを示します。
+
+3 行目の `True` は、未来の位置 `4` を変更しても、それ以前の位置 `0`〜`3` の出力が変わらないことを示します。最後の `True` は、causal mask を外すと未来の変更が位置 `3` の出力にも影響することを示しています。
+
+## 次の章へ
+
+前章で作った埋め込みは、各位置のトークンと位置だけから決まるベクトルでした。self-attention では、query と key から入力に応じた参照の重みを計算し、その重みで value を集約します。causal mask によって参照先を自分自身と過去の位置に制限し、`c_proj` を通した結果を元の配列に足すことで、各位置の表現に文脈の情報が取り込まれます。
+
+この章では head を 1 つに固定して計算を追いました。次章では、複数の head がそれぞれ情報を集約し、その出力を結合する multi-head attention を扱います。
