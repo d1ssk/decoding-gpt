@@ -1,0 +1,286 @@
+---
+title: 'From nanoGPT to nanochat'
+description: 'See how the pretraining core read in nanoGPT changes in nanochat and what nanochat adds: model changes such as RoPE and RMSNorm, the tokenizer and optimizer, training on conversations, and inference with a KV cache, traced through code at a pinned commit.'
+order: 13
+series: nanogpt
+lang: en
+translationKey: nanogpt-13-from-nanogpt-to-nanochat
+slug: 13-from-nanogpt-to-nanochat
+draft: false
+upstream:
+  repository: karpathy/nanochat
+  commit: 92d63d4e8bb4df75c3b71618f31ddde2378b2bcd
+  sourceFiles:
+    - nanochat/gpt.py
+    - nanochat/tokenizer.py
+    - nanochat/engine.py
+    - nanochat/optim.py
+    - scripts/base_train.py
+    - scripts/chat_sft.py
+    - runs/speedrun.sh
+experimentId: nanogpt-13-from-nanogpt-to-nanochat
+---
+
+import RotaryPositions from '../../../../components/RotaryPositions.astro';
+
+## What nanoGPT covered
+
+This series read the core of pretraining in nanoGPT (commit `3adf61e`): turning text into token IDs, computing next-token probabilities with a GPT, and reducing cross entropy with AdamW. The trained model can generate continuations of a given text.
+
+Building a model that answers questions, like ChatGPT, requires more than this core: large-scale data and a tokenizer, evaluation, additional training on conversations, and efficient inference. [nanochat](https://github.com/karpathy/nanochat/tree/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd), by the same author, brings these together in one repository. This chapter compares nanochat at commit `92d63d4` (July 3, 2026) with nanoGPT to see what stays the same and what changes.
+
+## The whole pipeline
+
+nanochat's [`runs/speedrun.sh`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/runs/speedrun.sh) collects the steps for training a model comparable to GPT-2 on an 8-GPU machine and making it available for conversation. Apart from environment setup, the main steps are:
+
+```bash
+python -m nanochat.dataset -n 8
+python -m nanochat.dataset -n 170 &
+python -m scripts.tok_train
+python -m scripts.tok_eval
+torchrun --standalone --nproc_per_node=8 -m scripts.base_train -- --depth=24 --target-param-data-ratio=8 --device-batch-size=16 --fp8 --run=$WANDB_RUN
+torchrun --standalone --nproc_per_node=8 -m scripts.base_eval -- --device-batch-size=16
+torchrun --standalone --nproc_per_node=8 -m scripts.chat_sft -- --run=$WANDB_RUN
+torchrun --standalone --nproc_per_node=8 -m scripts.chat_eval -- -i sft
+```
+
+The steps are data download, tokenizer training, pretraining, evaluation, additional training on conversation data (SFT), and its evaluation. Each part of nanoGPT corresponds to these nanochat files:
+
+| Role             | nanoGPT                                     | nanochat                                                                 |
+| ---------------- | ------------------------------------------- | ------------------------------------------------------------------------ |
+| Tokenizer        | `data/*/prepare.py` (characters, GPT-2 BPE) | `nanochat/tokenizer.py`, `scripts/tok_train.py` (a BPE trained in-house) |
+| Data loading     | `get_batch()` in `train.py`                 | `nanochat/dataset.py`, `nanochat/dataloader.py`                          |
+| Model            | `model.py`                                  | `nanochat/gpt.py`                                                        |
+| Optimizer        | `torch.optim.AdamW`                         | `nanochat/optim.py` (Muon combined with AdamW)                           |
+| Pretraining      | `train.py`                                  | `scripts/base_train.py`                                                  |
+| Evaluation       | `estimate_loss()`                           | `nanochat/loss_eval.py`, `nanochat/core_eval.py`, `scripts/chat_eval.py` |
+| Further training | `config/finetune_shakespeare.py`            | `scripts/chat_sft.py`, `scripts/chat_rl.py`                              |
+| Generation       | `GPT.generate()`, `sample.py`               | `nanochat/engine.py`, `scripts/chat_cli.py`                              |
+
+## Model: the same frame with new parts
+
+The top of [`nanochat/gpt.py`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py#L1-L13) lists the main changes from nanoGPT:
+
+```python
+"""
+GPT model (rewrite, a lot simpler)
+Notable features:
+- rotary embeddings (and no positional embeddings)
+- QK norm
+- untied weights for token embedding and lm_head
+- relu^2 activation in MLP
+- norm after token embedding
+- no learnable params in rmsnorm
+- no bias in linear layers
+- Group-Query Attention (GQA) support for more efficient inference
+- Flash Attention 3 integration
+"""
+```
+
+The parts differ, but the frame of [`Block.forward()`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py#L144-L153) matches nanoGPT: normalized inputs go to attention and the MLP, and their outputs are added to the residual stream (chapter 6).
+
+```python
+def forward(self, x, ve, cos_sin, window_size, kv_cache):
+    x = x + self.attn(norm(x), ve, cos_sin, window_size, kv_cache)
+    x = x + self.mlp(norm(x))
+    return x
+```
+
+The sections below go through the changed parts.
+
+### Representing position: RoPE
+
+nanoGPT added a learned vector per position, `wpe`, to the embeddings (chapter 3). nanochat has no position embedding. Instead, inside attention it **rotates queries and keys by angles that depend on position**, a method called RoPE (rotary position embedding). The relevant part of [`CausalSelfAttention.forward()`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py#L99-L104) is:
+
+```python
+cos, sin = cos_sin
+q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
+q, k = norm(q), norm(k) # QK norm
+q = q * 1.2  # sharper attention (split scale between Q and K), TODO think through better
+k = k * 1.2
+```
+
+[`apply_rotary_emb()`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py#L57-L65) splits a head's `d` components into halves and rotates components `i` and `i + d/2` as one two-dimensional vector:
+
+```python
+def apply_rotary_emb(x, cos, sin):
+    # note: this rotates by -theta, the transpose of the textbook convention. Functionally
+    # equivalent (only the relative q/k rotation matters), kept for checkpoint compatibility.
+    assert x.ndim == 4  # multihead attention
+    d = x.shape[3] // 2
+    x1, x2 = x[..., :d], x[..., d:] # split up last dim into two halves
+    y1 = x1 * cos + x2 * sin # rotate pairs of dims
+    y2 = x1 * (-sin) + x2 * cos
+    return torch.cat([y1, y2], 3)
+```
+
+Pair $i$ at position $m$ rotates by angle $m\,\omega_i$, with frequencies set in [`_precompute_rotary_embeddings()`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py#L270-L285) to $\omega_i = 100000^{-2i/d}$. Each pair rotates at a different speed: $i = 0$ turns 1 radian per position, and larger $i$ turn more slowly.
+
+The key property of the rotation is that **the dot product after rotation depends only on the relative position $m - n$**. Rotating the query at position $m$ by $-m\omega$ and the key at position $n$ by $-n\omega$ changes the angle between them by $(m-n)\omega$. A dot product depends only on the two lengths and the angle between the vectors, so the score depends on relative position, independent of absolute position.
+
+The diagram below is an illustrative example computed with nanochat's own functions. Moving `m` and `n` changes the rotated query and key, and their dot product, in the planes of pairs 0 and 1. The table below shows the dot products for every combination $(m, n)$.
+
+<RotaryPositions lang="en" />
+
+In the table, each diagonal running from upper left to lower right (pairs with equal relative position $m - n$) has a single color. The generator checks that $s_{m,n} = s_{m+1,n+1}$ holds for every combination in the 16 × 16 table.
+
+Without a position-embedding table, there is no limit like nanoGPT's `block_size` set by the number of learned positions. nanochat precomputes `cos` and `sin` up to ten times `sequence_len`.
+
+### Normalization: RMSNorm and QK norm
+
+nanoGPT's LayerNorm subtracted the mean, divided by the standard deviation, and multiplied by a learned `weight` (chapter 6). nanochat's [`norm()`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py#L42-L43) is an RMSNorm with no learnable parameters:
+
+```python
+def norm(x):
+    return F.rms_norm(x, (x.size(-1),)) # note that this will run in bf16, seems ok
+```
+
+$$
+\operatorname{RMSNorm}(\boldsymbol{x})_c = \frac{x_c}{\sqrt{\frac{1}{C}\sum_{c'} x_{c'}^2 + \varepsilon}}
+$$
+
+It divides by the root mean square without subtracting the mean. nanochat applies `norm()` before each sublayer and before the final layer, and also right after the token embedding and to the rotated queries and keys. Normalizing queries and keys (QK norm) makes the size of their dot products less dependent on the size of the weights and keeps the softmax weights from becoming extremely concentrated.
+
+### MLP activation: ReLU²
+
+The structure of the [`MLP`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py#L131-L141) (`C → 4C → C`) matches nanoGPT; the activation changes from GELU to the square of ReLU.
+
+```python
+def forward(self, x):
+    x = self.c_fc(x)
+    x = F.relu(x).square()
+    x = self.c_proj(x)
+    return x
+```
+
+Negative inputs give exactly 0. Chapter 6 showed that even with GELU, many hidden components are near 0.
+
+### Embedding and output layer
+
+nanochat does not tie the weights of `wte` and `lm_head` (unlike chapter 7). The `lm_head` weight is initialized with standard deviation 0.001, so the logits before training are almost 0 and the prediction is almost uniform. In addition, [`forward()`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py#L510-L515) smoothly limits the logits to $\pm 15$ with $15\tanh(z/15)$:
+
+```python
+softcap = 15 # smoothly cap the logits to the range [-softcap, softcap]
+logits = self.lm_head(x) # (B, T, padded_vocab_size) <- very big tensor, large amount of memory
+logits = logits[..., :self.config.vocab_size] # slice to remove padding
+logits = logits.float() # switch to fp32 for logit softcap and loss computation
+logits = softcap * torch.tanh(logits / softcap) # squash the logits
+```
+
+The loss uses the same `F.cross_entropy(..., ignore_index=-1)` as nanoGPT.
+
+### Compare parameters at the same size
+
+We built models with both implementations at the size of chapter 11's model (`n_layer = 4`, `n_head = 4`, `n_embd = 128`, vocabulary 65, context 64) and counted their parameters.
+
+| Component                         |             nanoGPT |    nanochat |
+| --------------------------------- | ------------------: | ----------: |
+| Token embedding `wte`             |               8,320 |      16,384 |
+| Position embedding `wpe`          |               8,192 |           — |
+| Output layer `lm_head`            | (shared with `wte`) |      16,384 |
+| Value embeddings                  |                   — |      32,768 |
+| Two-dimensional weights in blocks |             786,432 |     786,528 |
+| LayerNorm `weight`                |               1,152 |           — |
+| Per-layer scalars and others      |                   — |          34 |
+| **Total**                         |         **804,096** | **852,098** |
+
+nanochat rounds the vocabulary size up to a multiple of 64, so 65 becomes 128 and `wte` and `lm_head` are each 128 × 128. Value embeddings are a nanochat mechanism that adds a per-token vector to the values in some layers; the 96-element difference in block weights comes from the gates that control them. Computing the loss of the untrained nanochat model on random token IDs gave `4.1738`, almost equal to the uniform $\ln 65 = 4.1744$.
+
+### Attention efficiency and other additions
+
+- **Group-Query Attention**: setting `n_kv_head` below `n_head` makes several query heads share each key and value head, reducing the keys and values stored during inference.
+- **Sliding window attention**: with a pattern such as `window_pattern = "SSSL"`, some layers attend only to a recent range (about a quarter of the context length). The last layer always attends to the full range.
+- **Flash Attention 3**: a dedicated implementation on supported GPUs, otherwise PyTorch's `scaled_dot_product_attention` (the same function as in chapter 4's additional detail).
+- Other mechanisms tuned to shorten training time are added, such as `resid_lambdas`, which learns a scale for the residual stream at each layer, and `x0_lambdas`, which mixes the embedding back into each layer.
+
+## Training: data, tokenizer, optimizer, and scale
+
+### Train a tokenizer
+
+nanoGPT used either a character vocabulary or GPT-2's BPE as is (chapter 1). nanochat trains its own BPE tokenizer on its training data, with a default vocabulary size of $2^{15} = 32{,}768$. The vocabulary includes [special tokens](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/tokenizer.py#L9-L21) for representing conversations:
+
+```python
+SPECIAL_TOKENS = [
+    # every document begins with the Beginning of Sequence (BOS) token that delimits documents
+    "<|bos|>",
+    # tokens below are only used during finetuning to render Conversations into token ids
+    "<|user_start|>", # user messages
+    "<|user_end|>",
+    "<|assistant_start|>", # assistant messages
+    "<|assistant_end|>",
+    "<|python_start|>", # assistant invokes python REPL tool
+    "<|python_end|>",
+    "<|output_start|>", # python REPL outputs back to assistant
+    "<|output_end|>",
+]
+```
+
+### Optimizer: Muon and AdamW
+
+nanoGPT updated every weight with AdamW (chapter 10). nanochat's [`setup_optimizer()`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py#L419-L457) splits parameters by role and assigns different update rules and learning rates:
+
+- **Two-dimensional weights inside blocks**: Muon, an optimizer that conditions the gradient moving average with a near-orthogonalizing transformation before using it for the update.
+- **Embeddings, `lm_head`, and scalars**: AdamW, with learning rates and $\beta$ values chosen per group.
+
+### Choose the scale with one value
+
+In nanoGPT, `n_layer`, `n_head`, and `n_embd` were set separately. nanochat's [`scripts/base_train.py`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/scripts/base_train.py#L129-L140) derives the rest from the number of layers, `--depth`. The embedding dimension is `depth × 64` rounded up to a multiple of the head size, 128, and the number of heads is that dimension divided by 128. With `--depth=24` in `speedrun.sh`, this gives dimension 1,536 and 12 heads. The number of training tokens is also set in proportion to the parameter count.
+
+### Evaluation
+
+nanochat reports validation loss in **bits per byte** (bpb): the summed per-token loss divided by the total number of bytes represented by the target tokens, which allows comparison between tokenizers with different vocabularies. It also evaluates with the CORE score, which combines several benchmarks based on multiple-choice questions and text continuation, and with tasks for conversational models such as ARC, GSM8K, HumanEval, and MMLU.
+
+## Toward a conversational model
+
+### Turn conversations into tokens and train only on responses
+
+For SFT, [`render_conversation()`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/tokenizer.py#L140-L224) turns a conversation into one token sequence and builds a mask that marks which tokens are training targets. The table below is a conceptual diagram of a conversation with one user question and one assistant response (actual token boundaries are omitted).
+
+| Part                    | Example                   | mask |
+| ----------------------- | ------------------------- | ---: |
+| `<\|bos\|>`             |                           |    0 |
+| `<\|user_start\|>`      |                           |    0 |
+| User message            | `Why is the sky blue?`    |    0 |
+| `<\|user_end\|>`        |                           |    0 |
+| `<\|assistant_start\|>` |                           |    0 |
+| Assistant message       | `Because of Rayleigh ...` |    1 |
+| `<\|assistant_end\|>`   |                           |    1 |
+
+Only the parts the assistant should generate have mask 1. [`scripts/chat_sft.py`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/scripts/chat_sft.py#L284-L289) sets the target to `-1` wherever the mask is 0:
+
+```python
+# Apply the loss mask from render_conversation (mask=1 for assistant completions,
+# mask=0 for user prompts, BOS, special tokens, tool outputs). mask[1:] aligns
+# with targets (shifted by 1). Unmasked positions get -1 (ignore_index).
+mask_tensor = torch.tensor(mask_rows, dtype=torch.int8)
+mask_targets = mask_tensor[:, 1:].to(device=device)
+targets[mask_targets == 0] = -1
+```
+
+With `ignore_index=-1` from chapter 8, user messages and similar parts are excluded from the loss average. The model reads the whole conversation as input and learns to predict only the assistant's response. The one-token shift between inputs and targets (`mask[1:]`) is the same as chapter 2's `X` and `Y`.
+
+### Generate one token at a time with a KV cache
+
+nanoGPT's `generate()` passed the entire input through `forward()` for every new token (chapter 7). The keys and values of past positions are the same every time, so this computation is repeated.
+
+nanochat's [`Engine.generate()`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/engine.py#L176-L276) stores each layer's keys and values in a **KV cache**. It first passes the whole prompt once to build the cache (prefill), then feeds only the new token and computes attention together with the cached keys and values:
+
+```python
+ids = torch.tensor(token_column, dtype=torch.long, device=device).unsqueeze(1)
+logits = self.model.forward(ids, kv_cache=kv_cache_decode)[:, -1, :]  # (B, vocab_size)
+```
+
+RoPE expresses position as a rotation angle, so with a cache the new token's position is taken from the cache length before rotating (`T0 = kv_cache.get_pos()`).
+
+`Engine.generate()` also handles tool use: it evaluates an expression generated between `<|python_start|>` and `<|python_end|>` with a calculator and inserts the result into the token sequence, wrapped in `<|output_start|>` and `<|output_end|>`. These tokens have mask 0 in SFT, so the model is never trained to predict them.
+
+## Summary of the nanoGPT series
+
+What this series read in nanoGPT remains the foundation of nanochat:
+
+- Turn text into token IDs and predict the next token from inputs and targets shifted by one (chapters 1–2).
+- Update each position's vector with embeddings, self-attention, multi-head attention, the MLP, and the residual stream (chapters 3–6).
+- Compute probabilities and cross entropy from vocabulary scores, obtain gradients by backpropagation, and update with an optimizer (chapters 7–10).
+- Evaluate training through loss curves, generated text, and experiments at different scales (chapters 11–12).
+
+nanochat renews components such as position representation, normalization, activation functions, and the optimizer, and adds tokenizer training, further training on conversations, evaluation, and inference with a KV cache. The upcoming nanochat series plans to read these in turn.

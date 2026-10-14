@@ -1,0 +1,192 @@
+---
+title: '損失'
+description: '各位置の予測確率と正解のトークンから cross entropy を計算し、バッチ全体の損失を 1 つの数値にまとめる。学習の前後で、どの文字の予測が難しいかを確かめる。'
+order: 8
+series: nanogpt
+lang: ja
+translationKey: nanogpt-08-loss
+slug: 08-loss
+draft: false
+upstream:
+  repository: karpathy/nanoGPT
+  commit: 3adf61e154c3fe3fca428ad6bc3818b27a3b8291
+  sourceFiles:
+    - model.py
+    - train.py
+experimentId: nanogpt-08-loss
+---
+
+import CrossEntropyToy from '../../../../components/CrossEntropyToy.astro';
+import TokenLoss from '../../../../components/TokenLoss.astro';
+
+## 予測と正解を 1 つの数値にする
+
+前章までで、モデルはバッチの全位置について、次のトークンの logits を計算できるようになりました。学習では、この予測が正解 `Y` とどれだけ合っているかを **1 つの数値** で表し、その数値が小さくなるように重みを更新します。この数値が **損失（loss）** です。
+
+[`GPT.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L184-L187) は、`targets` を渡されると logits と一緒に損失を返します。
+
+```python
+if targets is not None:
+    # if we are given some desired targets also calculate the loss
+    logits = self.lm_head(x)
+    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+```
+
+第 2 章の学習ループでは、`get_batch()` が返した `X, Y` を `model(X, Y)` に渡していました。その `Y` が、ここでの `targets` です。
+
+`F.cross_entropy()` は、1 行に 1 つの予測が並んだ 2 次元配列を受け取ります。そこで `view()` でバッチと位置の軸をまとめます。
+
+```text
+logits                 [B, T, V]
+logits.view(-1, V)     [B·T, V]
+targets                [B, T]
+targets.view(-1)       [B·T]
+loss                   []        スカラー
+```
+
+`B·T` 個の予測それぞれについて損失を計算し、その平均を 1 つのスカラーとして返します。
+
+## cross entropy
+
+位置 `t` の logits を $\boldsymbol{z}$、正解のトークンを $y$ とします。softmax で求めた正解の確率を $p_y$ と書くと、その位置の **cross entropy** は次のとおりです。
+
+$$
+\ell = -\log p_y = -z_y + \log\sum_{u=0}^{V-1}\exp(z_u)
+$$
+
+`F.cross_entropy()` は logits から直接この値を計算します。softmax と log を別々に計算するより、数値的に安定です。`reduction` の既定値は `'mean'` なので、バッチの損失は全 $N = B \cdot T$ 個の予測の平均です。
+
+$$
+\mathcal{L} = \frac{1}{N}\sum_{n=1}^{N} -\log p^{(n)}_{y_n}
+$$
+
+この損失には、次の性質があります。
+
+- 正解の確率が 1 なら損失は 0、確率が 0 に近づくと損失は限りなく大きくなる。
+- 損失に影響するのは正解の確率だけ。ほかのトークンの確率は、softmax の分母を通して間接的に影響する。
+- すべてのトークンに等しい確率 $1/V$ を割り当てると、損失は $\ln V$ になる。語彙 65 種類なら $\ln 65 \approx 4.174$。
+
+次の図は、5 種類のトークンからなる説明用の例です。logits を動かすと、softmax の確率と損失がどう変わるかを確認できます。正解の logit を上げると損失は下がり、ほかのトークンの logit を上げると正解の確率が下がって損失が上がります。
+
+<CrossEntropyToy lang="ja" />
+
+### 平均の対数確率としての損失
+
+文章全体の確率は、各位置の条件付き確率の積です。
+
+$$
+p(x_1, \dots, x_T) = \prod_{t} p(x_{t+1} \mid x_1, \dots, x_t)
+$$
+
+対数をとると積は和になるので、平均の損失を小さくすることは、学習データの文章全体の確率を大きくすることと同じです。
+
+損失の単位は自然対数による nat です。$\ln 2$ で割ると bit になり、$e^{\mathcal{L}}$ は **perplexity** と呼ばれます。perplexity は「平均して何個の候補から当てずっぽうに選ぶのと同じ難しさか」を表します。一様な予測では 65、第 11 章で学習したモデルの検証損失 `1.8857` では約 6.6 です。
+
+### `ignore_index=-1`
+
+`ignore_index=-1` は、正解が `-1` の位置を損失の計算から除外し、平均の分母にも数えない指定です。nanoGPT の `get_batch()` が作る `Y` には `-1` は含まれないので、Shakespeare の学習では使われません。会話データで、応答の部分だけを学習するときなどに使います。nanochat がこの指定を使う例は第 13 章で扱います。
+
+## 学習前の損失は $\ln V$ に近い
+
+nanoGPT は重みを標準偏差 0.02 の正規分布で初期化します。学習前の logits はどれも 0 に近く、softmax の結果はほぼ一様分布です。したがって、学習前の損失は $\ln V$ に近い値になります。
+
+第 11 章の学習では、更新前に `train.py` が表示した検証損失は `4.1649` で、$\ln 65 = 4.1744$ とほぼ一致しました。学習を始めた直後の損失が $\ln V$ から大きく外れている場合は、初期化やデータの扱いに問題がある可能性があります。
+
+## 学習済みモデルで文字ごとの損失を見る
+
+次の図は、第 11 章の学習の 3 つの段階で、検証データの 64 文字それぞれに割り当てた損失です。各文字の背景が濃いほど、その文字を直前までの文字から予測するのが難しかったことを表します。最初の `G` は予測の対象にならないので、色を付けていません。
+
+<TokenLoss lang="ja" />
+
+段階を切り替えると、次のことがわかります。
+
+1. **更新 0 回後**は、どの文字の損失も `3.06`〜`4.69` の範囲に収まり、文字による差は小さいです。この 64 文字の平均損失は `4.113` です。
+2. **更新 250 回後**には、空白と改行の損失が先に下がります。正解が空白か改行の位置では平均 `0.45`、それ以外の位置では平均 `3.18` です。全体の平均損失は `2.797` です。
+3. **更新 2,000 回後**には平均損失が `2.061` まで下がります。`GREMIO:` の後の改行（`0.00`）や `Goo` に続く `d`（`0.12`）など、前の文字から決まりやすい文字の損失は小さくなります。
+
+一方で、2,000 回後も損失が大きいのは、`Baptista` の `B`（`6.81`）、`Baptista` の後の `.`（`6.70`）、`neighbour` の `b`（`6.51`）でした。新しい単語の始まりや、文脈から決めにくい文字は、学習後も予測が困難です。
+
+この 64 文字の平均損失は、検証データ全体の損失とは異なります。図の「検証データ 200 本の平均損失」は、検証データから固定 seed で選んだ 200 本（各 64 文字）の平均で、2,000 回後は `1.911` でした。
+
+## 学習中の損失の見積もり
+
+`train.py` は、学習の途中で学習用・検証用それぞれの損失を見積もります。[`estimate_loss()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L214-L228) は次の関数です。
+
+```python
+@torch.no_grad()
+def estimate_loss():
+    out = {}
+    model.eval()
+    for split in ['train', 'val']:
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            X, Y = get_batch(split)
+            with ctx:
+                logits, loss = model(X, Y)
+            losses[k] = loss.item()
+        out[split] = losses.mean()
+    model.train()
+    return out
+```
+
+`model.eval()` で dropout を無効にし、`eval_iters` 個のランダムなバッチの損失を平均します。学習ループの各ステップで表示される損失は 1 バッチ分の値でばらつきが大きいため、学習の進み具合はこの見積もりで判断します。学習用と検証用の損失の差の読み方は第 11 章で扱います。
+
+## コードで確かめる
+
+第 11 章のチェックポイントを使い、`forward()` の損失が各位置の $-\log p_y$ の平均であること、`ignore_index` の効果、学習前の損失を確かめます。検証データの 65 文字から、入力 64 文字と 1 文字ずらした正解 64 文字を作ります。
+
+```python
+import math
+import pickle
+import torch
+from torch.nn import functional as F
+from model import GPT, GPTConfig
+
+ckpt = torch.load('out-shakespeare-char/ckpt.pt', map_location='cpu')
+model = GPT(GPTConfig(**ckpt['model_args']))
+model.load_state_dict(ckpt['model'])
+model.eval()
+torch.manual_seed(1337)
+untrained = GPT(GPTConfig(**ckpt['model_args'])).eval()
+
+with open('data/shakespeare_char/meta.pkl', 'rb') as f:
+    stoi = pickle.load(f)['stoi']
+text = "GREMIO:\nGood morrow, neighbour Baptista.\n\nBAPTISTA:\nGood morrow, "
+ids = [stoi[c] for c in text]
+idx = torch.tensor([ids[:-1]])
+targets = torch.tensor([ids[1:]])
+
+with torch.no_grad():
+    logits, loss = model(idx, targets)
+    logp = F.log_softmax(logits[0], dim=-1)
+    per_position = -logp[torch.arange(64), targets[0]]
+
+    masked = targets.clone()
+    masked[0, :8] = -1
+    _, masked_loss = model(idx, masked)
+    _, untrained_loss = untrained(idx, targets)
+
+print(round(loss.item(), 4), torch.allclose(loss, per_position.mean()))
+print(torch.allclose(masked_loss, per_position[8:].mean()))
+print(round(untrained_loss.item(), 4), round(math.log(65), 4))
+worst = per_position.topk(3)
+print([(text[i + 1], round(v, 2)) for i, v in
+       zip(worst.indices.tolist(), worst.values.tolist())])
+```
+
+`untrained` は、`train.py` と同じ seed `1337` で初期化した学習前のモデルです。2 回のパラメータ数の表示に続き、生成環境では次の結果が得られました。
+
+```text
+2.0614 True
+True
+4.1128 4.1744
+[('B', 6.81), ('.', 6.7), ('b', 6.51)]
+```
+
+1 行目は、`forward()` が返す損失が各位置の $-\log p_y$ の平均に一致することを示します。2 行目は、先頭 8 位置の正解を `-1` にすると、その位置を除いた平均になることを示します。3 行目は学習前の損失と $\ln 65$、最後の行は損失が最も大きい 3 文字です。
+
+## 次の章へ
+
+cross entropy は、各位置で正解のトークンに割り当てた確率の負の対数です。nanoGPT はバッチの全位置の平均を損失とし、学習前は $\ln V$ に近い値から始まります。学習済みモデルでは、前の文字から決まりやすい文字の損失は小さく、新しい単語の始まりの損失は大きいままでした。
+
+この損失を小さくするには、各重みをどちらにどれだけ動かせばよいかを知る必要があります。次章では、損失から全ての重みの勾配を求める誤差逆伝播を扱います。

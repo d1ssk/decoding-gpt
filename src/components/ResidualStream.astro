@@ -1,0 +1,328 @@
+---
+import data from '../../public/site/data/nanogpt/residual-stream.json';
+import { residualUi, sublayerName } from '../lib/residual';
+import { charLabel, linearScale, linePath, ticks } from '../lib/plot';
+import type { Language } from '../lib/site';
+
+interface Props {
+  lang: Language;
+}
+const { lang } = Astro.props;
+const ui = residualUi[lang];
+const chars = [...data.text];
+const initial = 52;
+const items = data.contributions;
+const width = 600;
+const height = 230;
+const margin = { left: 40, right: 12, top: 12, bottom: 34 };
+const maxValue = Math.max(
+  ...items.flatMap((item) => [...item.norm, ...item.streamNorm]),
+);
+const yMax = Math.ceil(maxValue);
+const band = (width - margin.left - margin.right) / items.length;
+const x = (i: number) => margin.left + band * (i + 0.5);
+const y = linearScale([0, yMax], [height - margin.bottom, margin.top]);
+const barPath = (position: number) =>
+  items
+    .map((item, i) => {
+      const top = y(item.norm[position]);
+      return `M${(x(i) - band * 0.3).toFixed(1)} ${y(0)}V${top.toFixed(1)}h${(band * 0.6).toFixed(1)}V${y(0)}Z`;
+    })
+    .join('');
+const streamPath = (position: number) =>
+  linePath(
+    items.map((item, i) => [i, item.streamNorm[position]] as [number, number]),
+    x,
+    y,
+  );
+const payload = JSON.stringify({
+  bars: chars.map((_, t) => barPath(t)),
+  streams: chars.map((_, t) => streamPath(t)),
+  points: chars.map((_, t) =>
+    items.map((item, i) => [x(i), y(item.streamNorm[t])]),
+  ),
+  rows: chars.map((_, t) =>
+    items.map((item) => [item.norm[t], item.streamNorm[t], item.cosToFinal[t]]),
+  ),
+  text: data.text,
+});
+---
+
+<figure class="residual-stream" data-residual-stream data-payload={payload}>
+  <figcaption>{ui.streamCaption}</figcaption>
+  <p class="note" id={`residual-instruction-${lang}`}>
+    {ui.instruction}
+  </p>
+  <div
+    class="text"
+    role="group"
+    aria-describedby={`residual-instruction-${lang}`}
+  >
+    {chars.map((char, t) => (
+      <Fragment>
+        <button
+          type="button"
+          data-position={t}
+          aria-pressed={t === initial}
+          aria-label={`${ui.position} ${t}: ${charLabel(char)}`}
+          class:list={{ newline: char === '\n' }}
+          disabled
+        >
+          {charLabel(char)}
+        </button>
+        {char === '\n' && <br />}
+      </Fragment>
+    ))}
+  </div>
+  <p class="selected" aria-live="polite">
+    {ui.position}{' '}
+    <output data-selected>
+      {initial} ({charLabel(chars[initial])})
+    </output>
+  </p>
+  <svg
+    viewBox={`0 0 ${width} ${height}`}
+    role="img"
+    aria-label={ui.streamCaption}
+  >
+    {ticks(0, yMax, 5).map((value) => (
+      <>
+        <path
+          d={`M${margin.left} ${y(value)}H${width - margin.right}`}
+          class="grid"
+        />
+        <text
+          x={margin.left - 6}
+          y={y(value) + 4}
+          class="tick"
+          text-anchor="end"
+        >
+          {value}
+        </text>
+      </>
+    ))}
+    <path data-bars d={barPath(initial)} class="bars" />
+    <path data-stream d={streamPath(initial)} class="stream" />
+    {items.map((item, i) => (
+      <>
+        <circle
+          data-point={i}
+          cx={x(i)}
+          cy={y(item.streamNorm[initial])}
+          r="3.5"
+          class="point"
+        />
+        <text
+          x={x(i)}
+          y={height - margin.bottom + 18}
+          class="label"
+          text-anchor="middle"
+        >
+          {sublayerName(item.name)}
+        </text>
+      </>
+    ))}
+  </svg>
+  <p class="legend">
+    <span class="item">
+      <span class="key bar-key"></span>
+      {ui.write}
+    </span>
+    <span class="item">
+      <span class="key stream-key"></span>
+      {ui.stream}
+    </span>
+  </p>
+  <div
+    class="table-scroll"
+    role="region"
+    aria-label={ui.streamCaption}
+    tabindex="0"
+  >
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">{ui.sublayer}</th>
+          <th scope="col">{ui.write}</th>
+          <th scope="col">{ui.stream}</th>
+          <th scope="col">{ui.cos}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {items.map((item, i) => (
+          <tr>
+            <th scope="row">{sublayerName(item.name)}</th>
+            <td data-cell={`${i}-0`}>{item.norm[initial].toFixed(3)}</td>
+            <td data-cell={`${i}-1`}>{item.streamNorm[initial].toFixed(3)}</td>
+            <td data-cell={`${i}-2`}>{item.cosToFinal[initial].toFixed(3)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+  <noscript>
+    <p class="note">{ui.noScript}</p>
+  </noscript>
+</figure>
+
+<script>
+  import { charLabel } from '../lib/plot';
+
+  document
+    .querySelectorAll<HTMLElement>('[data-residual-stream]')
+    .forEach((root) => {
+      const { bars, streams, points, rows, text } = JSON.parse(
+        root.dataset.payload!,
+      ) as {
+        bars: string[];
+        streams: string[];
+        points: [number, number][][];
+        rows: number[][][];
+        text: string;
+      };
+      const chars = [...text];
+      const buttons =
+        root.querySelectorAll<HTMLButtonElement>('[data-position]');
+      const select = (t: number) => {
+        buttons.forEach((button, i) =>
+          button.setAttribute('aria-pressed', String(i === t)),
+        );
+        root.querySelector('[data-bars]')!.setAttribute('d', bars[t]);
+        root.querySelector('[data-stream]')!.setAttribute('d', streams[t]);
+        root
+          .querySelectorAll<SVGCircleElement>('[data-point]')
+          .forEach((point, i) =>
+            point.setAttribute('cy', String(points[t][i][1])),
+          );
+        rows[t].forEach((row, i) =>
+          row.forEach((value, k) => {
+            root.querySelector(`[data-cell="${i}-${k}"]`)!.textContent =
+              value.toFixed(3);
+          }),
+        );
+        root.querySelector('[data-selected]')!.textContent =
+          `${t} (${charLabel(chars[t])})`;
+      };
+      buttons.forEach((button) => {
+        button.disabled = false;
+        button.addEventListener('click', () =>
+          select(Number(button.dataset.position)),
+        );
+      });
+    });
+</script>
+
+<style>
+  .residual-stream {
+    border-block: 1px solid var(--line-strong);
+    margin: 2rem 0;
+    padding: 1.25rem 0;
+  }
+  figcaption {
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+  }
+  .note,
+  .legend,
+  .selected {
+    font-size: 0.8rem;
+  }
+  .note {
+    color: var(--ink-secondary);
+  }
+  .text {
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    line-height: 1.9;
+    margin: 0.75rem 0;
+  }
+  .text button {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--ink);
+    cursor: pointer;
+    font: inherit;
+    margin: 0;
+    min-width: 1.05em;
+    padding: 0 0.08em;
+  }
+  .text button:hover:not(:disabled) {
+    background: var(--paper-subtle);
+  }
+  .text button:disabled {
+    cursor: default;
+  }
+  .text button.newline {
+    color: var(--ink-muted);
+    font-size: 0.75em;
+  }
+  .text button[aria-pressed='true'] {
+    background: var(--accent-light);
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  output {
+    font-family: var(--font-mono);
+  }
+  svg {
+    display: block;
+    height: auto;
+    width: 100%;
+  }
+  .grid {
+    stroke: var(--line);
+    stroke-width: 0.7;
+  }
+  .tick,
+  .label {
+    fill: var(--ink-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+  .label {
+    fill: var(--ink-secondary);
+  }
+  .bars {
+    fill: #a05a20;
+    fill-opacity: 0.55;
+  }
+  .stream {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2;
+  }
+  .point {
+    fill: var(--accent);
+  }
+  .legend {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.2rem;
+  }
+  .item {
+    align-items: center;
+    display: inline-flex;
+    gap: 0.4rem;
+  }
+  .key {
+    display: inline-block;
+    height: 0.7rem;
+    width: 1.2rem;
+  }
+  .bar-key {
+    background: rgba(160, 90, 32, 0.55);
+  }
+  .stream-key {
+    border-top: 3px solid var(--accent);
+    height: 0;
+  }
+  .table-scroll {
+    overflow-x: auto;
+  }
+  table {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    white-space: nowrap;
+  }
+</style>

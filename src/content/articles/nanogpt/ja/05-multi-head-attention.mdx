@@ -1,0 +1,213 @@
+---
+title: 'multi-head attention'
+description: 'ベクトルの成分を複数の head に分け、head ごとに参照の重みを計算してから結合する。学習済みの小さなモデルで、head ごとの参照パターンと損失への寄与を確かめる。'
+order: 5
+series: nanogpt
+lang: ja
+translationKey: nanogpt-05-multi-head-attention
+slug: 05-multi-head-attention
+draft: false
+upstream:
+  repository: karpathy/nanoGPT
+  commit: 3adf61e154c3fe3fca428ad6bc3818b27a3b8291
+  sourceFiles:
+    - model.py
+experimentId: nanogpt-05-multi-head-attention
+---
+
+import HeadSplit from '../../../../components/HeadSplit.astro';
+import AttentionHeads from '../../../../components/AttentionHeads.astro';
+
+## 1 つの位置から複数の参照先を同時に見る
+
+前章では `n_head = 1` として、1 つの attention head の計算を追いました。head が 1 つの場合、各位置の出力は 1 組の参照の重みで value を足し合わせたものになります。
+
+文章の続きを予測するには、性質の異なる情報が同時に必要です。文字単位のモデルなら、直前の文字、いま読んでいる単語の先頭、行の先頭などが手がかりになります。1 組の重みでこれらを同時に表すには、重みを複数の位置に分散させるしかありません。
+
+**multi-head attention** は、参照の重みの計算を複数並べ、それぞれに別の query・key・value を割り当てます。各 head は独立に参照先を決め、その結果を最後に 1 つのベクトルへまとめます。
+
+nanoGPT では、multi-head attention のために新しいモジュールを追加しません。前章で読んだ [`CausalSelfAttention.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L52-L76) が、`n_head > 1` の場合もそのまま動きます。この章では、同じコードを head の軸に注目して読み直します。
+
+## 成分を head ごとに分ける
+
+`CausalSelfAttention.forward()` の前半は次のとおりです。参照元のコメントも残しています。
+
+```python
+B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+
+q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
+k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+```
+
+コメントの `nh` は head 数 `H`、`hs` は head ごとの成分数 `d = C / H` です。`CausalSelfAttention.__init__()` の `assert config.n_embd % config.n_head == 0` は、`C` が `H` で割り切れることを確認しています。
+
+`view(B, T, H, d)` は、各位置の `C` 成分のベクトルを、**先頭から `d` 成分ずつ** `H` 個に区切ります。head `h` が使うのは、成分 `h·d` から `(h+1)·d − 1` までです。続く `transpose(1, 2)` で head の軸を位置の軸より前に移し、形状を `[B, H, T, d]` にします。
+
+`c_attn` は 1 つの `nn.Linear` ですが、出力の成分を区切ることは、重みの行を区切ることに対応します。query 部分の重み `[C, C]` のうち、行 `h·d` から `(h+1)·d − 1` が head `h` の query を作る `[d, C]` の変換です。key と value も同様なので、**各 head は自分専用の Q・K・V の線形変換を持ちます**。
+
+次の図では、第 11 章で学習するモデルと同じ `C = 128` の query ベクトルを head ごとに色分けしています。`H` を変えると、各 head が受け持つ成分数と、計算の途中で現れる配列の形状が変わります。
+
+<HeadSplit lang="ja" />
+
+`H` を増やすと head あたりの成分数 `d` は減りますが、`c_attn` と `c_proj` の重みの形状は `H` によらず `[3C, C]` と `[C, C]` です。head 数は、同じ重みの要素数をいくつの独立な参照の計算に割り振るかを決めます。
+
+## head ごとに参照の重みを計算する
+
+ここからの計算は、前章とまったく同じコードです。
+
+```python
+att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+att = F.softmax(att, dim=-1)
+att = self.attn_dropout(att)
+y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+```
+
+PyTorch の `@` は、最後の 2 軸で積を計算し、それより前の軸 `[B, H]` をバッチとして扱います。そのため、**サンプルごと・head ごとに独立な** attention の計算がまとめて行われます。
+
+```text
+q                         [B, H, T, d]
+k.transpose(-2, -1)       [B, H, d, T]
+att                       [B, H, T, T]
+v                         [B, H, T, d]
+y = att @ v               [B, H, T, d]
+```
+
+サンプル `b` の head `h` について、2 次元配列 $Q^{(h)}$・$K^{(h)}$・$V^{(h)}$（いずれも $T \times d$）を使うと、計算は次のように書けます。
+
+$$
+A^{(h)} = \operatorname{softmax}\!\left(\frac{Q^{(h)}{K^{(h)}}^\top}{\sqrt{d}} + M\right),
+\qquad
+Y^{(h)} = A^{(h)} V^{(h)}
+$$
+
+スケーリングに使う `k.size(-1)` は head ごとの成分数 `d` です。前章では `d = C` でしたが、`H = 4`、`C = 128` なら `d = 32` で、`1/√32` を掛けます。causal mask $M$ はすべての head で共通です。`self.bias` の形状 `[1, 1, T, T]` が、バッチと head の軸に broadcast されます。
+
+head の数だけ参照の重み `att[b, h]` があり、各 head は value のうち自分の `d` 成分だけを集めます。したがって、ある位置の出力を作る際に、head 0 は直前の文字から、head 3 は行の先頭から、というように異なる位置の情報を同時に集められます。
+
+## head の出力を並べて `c_proj` で混ぜる
+
+各 head が集めた `[B, H, T, d]` の結果は、次の 2 行で元の形状に戻ります。
+
+```python
+y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+y = self.resid_dropout(self.c_proj(y))
+```
+
+`transpose(1, 2)` で `[B, T, H, d]` に戻し、`view(B, T, C)` で最後の 2 軸をつなげます。位置 `t` のベクトルは、head 0 から head `H − 1` までの出力を順に並べたものです。
+
+$$
+\boldsymbol{y}_t = \left[\,\boldsymbol{y}^{(0)}_t;\ \boldsymbol{y}^{(1)}_t;\ \dots;\ \boldsymbol{y}^{(H-1)}_t\,\right]
+$$
+
+この段階では、各 head の結果は別々の成分に入っています。続く `c_proj`（`nn.Linear(C, C)`）が、それらを混ぜて `C` 成分の出力を作ります。重み $W_O$（形状 `[C, C]`）の列を head ごとに `d` 列ずつ区切って $W_O^{(h)}$ と書くと、bias を除いて
+
+$$
+W_O \boldsymbol{y}_t = \sum_{h=0}^{H-1} W_O^{(h)} \boldsymbol{y}^{(h)}_t
+$$
+
+が成り立ちます。**各 head は、自分の列ブロックを通して残差ストリームに書き込み、その和が attention の出力になります**。前章で、head が 1 つなら `c_proj` は value の変換に吸収できると述べました。複数の head では、別々に集めた情報を `C` 成分の空間でどう組み合わせるかを `c_proj` が学習します。
+
+計算量も確かめておきます。スコアの計算 `q @ kᵀ` は、head ごとに `T × T × d` 回の積和で、`H` 個の head 全体では `T × T × C` です。head 数を変えても、重みの要素数とスコア計算の積和の回数は変わりません。変わるのは、参照の重みの組の数と、1 組あたりの成分数です。
+
+## 学習済みモデルで head を観察する
+
+ここからは、**第 11 章で実際に学習するモデル**を使います。参照元リポジトリの README が CPU 向けに示す設定で、`n_layer = 4`、`n_head = 4`、`n_embd = 128`（`d = 32`）、`block_size = 64` の文字単位モデルです。Tiny Shakespeare で 2,000 回更新し、`train.py` が表示した検証損失は `1.8857` でした。学習の手順と結果は第 11 章で詳しく扱います。
+
+入力には、検証データ `val.bin` の位置 3 から始まる 64 文字を使います。
+
+```text
+GREMIO:
+Good morrow, neighbour Baptista.
+
+BAPTISTA:
+Good morrow,
+```
+
+層と head を選び、文字を選んでください。その位置の出力を計算する際に、各位置へ割り当てた重み（`att[0, h, t, :]` の 1 行）を文字の背景の濃さで表示します。下の配列全体は、同じ head の `64 × 64` の参照の重みです。対角線より右上は causal mask により `0` です。
+
+<AttentionHeads lang="ja" />
+
+### 観察
+
+この図の値は学習済みモデルの実際の計算結果ですが、観察はこのモデルとこの入力に基づくものです。
+
+1. **層 0 の head は近くを見ます。** 4 つの head はいずれも平均参照距離が 3 文字前後で、直前の位置への重みの平均は 0.21–0.30 です。
+2. **層 1・head 3 は行の先頭を見ます。** 平均参照距離は 13.8 文字と、ほかの head より大きくなっています。2 つ目の `Good morrow,` の中のほとんどの位置で、最大の重みが直前の改行（位置 51）に割り当てられています。たとえば位置 55 の `d` では `0.807` です。
+3. **層 1 の head 0 と head 1 は単語の先頭を見ます。** `morrow` の前半 `m`・`o`・`r`・`r`（位置 57–60）を選ぶと、両 head とも直前の空白（位置 56）に `0.69`–`0.996` の重みを割り当てています。
+4. **同じ語句の繰り返しは参照していません。** 2 つ目の `Good morrow,`（位置 52–63）は 1 つ目（位置 8–19）と同じ文字列ですが、1 つ目の範囲へ割り当てられた重みは、16 個の head すべてを通して最大でも `0.074` でした。観察した範囲では、各 head は近くの位置や、空白・改行などの区切り文字を参照しています。
+
+### head を 0 にすると損失はどう変わるか
+
+head の重要度を測る方法の 1 つに、その head の出力 `y[:, h]` を `c_proj` の前で `0` に置き換え、損失の変化を見る方法があります。この操作は推論時の nanoGPT には存在しない、観察用の介入です。
+
+検証データから固定 seed で選んだ 200 本の入力（各 64 文字）で、基準の損失は `1.9107` でした。`train.py` の `1.8857` とは、評価に使う入力の選び方と本数が異なります。損失の増加が最も大きいのは層 0・head 3 の `+0.240`、最も小さいのは層 3・head 3 の `+0.005` です。行の先頭を見る層 1・head 3 は `+0.007` でした。上の図の「全 head の統計を表示」で一覧を確認できます。
+
+損失の増加は、残りのモデルがその head の出力にどれだけ依存しているかを表します。head が表す内容を調べるには、参照パターンなど別の観察と組み合わせます。実際、行の先頭を見る層 1・head 3 は、参照パターンがはっきりしている一方で、損失の増加は小さい head でした。
+
+## コードで確かめる
+
+第 11 章の学習コマンドを実行すると、`out-shakespeare-char/ckpt.pt` に学習済みモデルが保存されます。次のコードは、そのチェックポイントと参照元の固定コミットの `model.py` を使い、層 1 の multi-head attention を手で計算します。nanoGPT のディレクトリで実行してください。
+
+```python
+import math
+import pickle
+import torch
+from torch.nn import functional as F
+from model import GPT, GPTConfig
+
+ckpt = torch.load('out-shakespeare-char/ckpt.pt', map_location='cpu')
+model = GPT(GPTConfig(**ckpt['model_args']))
+model.load_state_dict(ckpt['model'])
+model.eval()
+
+with open('data/shakespeare_char/meta.pkl', 'rb') as f:
+    stoi = pickle.load(f)['stoi']
+text = "GREMIO:\nGood morrow, neighbour Baptista.\n\nBAPTISTA:\nGood morrow,"
+idx = torch.tensor([[stoi[c] for c in text]])
+
+block = model.transformer.h[1]
+B, T = idx.shape
+C, H = model.config.n_embd, model.config.n_head
+d = C // H
+
+with torch.no_grad():
+    x = model.transformer.wte(idx) + model.transformer.wpe(torch.arange(T))
+    x = model.transformer.h[0](x)
+    x = block.ln_1(x)
+
+    q, k, v = block.attn.c_attn(x).split(C, dim=2)
+    q, k, v = [a.view(B, T, H, d).transpose(1, 2) for a in (q, k, v)]
+    mask = torch.ones(T, T, dtype=torch.bool).tril()
+    att = (q @ k.transpose(-2, -1)) / math.sqrt(d)
+    att = F.softmax(att.masked_fill(~mask, float('-inf')), dim=-1)
+    y = att @ v
+    out = block.attn.c_proj(y.transpose(1, 2).contiguous().view(B, T, C))
+
+    W = block.attn.c_proj.weight
+    by_head = sum(y[:, h] @ W[:, h * d:(h + 1) * d].T for h in range(H))
+
+print(list(q.shape), list(att.shape), list(y.shape), list(out.shape))
+print(torch.allclose(out, block.attn(x), atol=1e-6))
+print(torch.allclose(out, by_head, atol=1e-6))
+print(att[0, :, 61].argmax(dim=-1).tolist())
+```
+
+このモデルは `bias=False` なので、`c_proj` に bias はありません。パラメータ数の表示に続き、生成環境では次の結果が得られました。
+
+```text
+[1, 4, 64, 32] [1, 4, 64, 64] [1, 4, 64, 32] [1, 64, 128]
+True
+True
+[61, 61, 58, 51]
+```
+
+1 行目は、query・参照の重み・head ごとの集約結果・attention の出力の形状です。2 行目は手計算と参照元モジュールの出力の一致、3 行目は「head ごとの列ブロックの寄与の和」が `c_proj` の出力に等しいことを示します。最後の行は、位置 61 で各 head が最大の重みを置く位置で、head 3 は改行の位置 51 を参照しています。
+
+## 次の章へ
+
+multi-head attention は、`C` 成分を `H` 個の head に分け、head ごとに別の参照の重みで value を集めます。集めた結果を並べて `c_proj` に通すことで、各 head が列ブロックを通して出力へ書き込みます。学習済みモデルでは、直前の文字、単語の先頭、行の先頭など、head ごとに異なる位置を参照していました。
+
+attention の出力は、`Block.forward()` で元の `x` に足されます。次章では、その足し算でつながる残差ストリームと、各位置を個別に変換する MLP、そして両者の前に置かれた LayerNorm を扱います。

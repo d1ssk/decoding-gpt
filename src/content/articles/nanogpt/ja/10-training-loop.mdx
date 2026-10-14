@@ -1,0 +1,261 @@
+---
+title: '学習ループ'
+description: 'train.py の学習ループを、AdamW による更新、weight decay の対象、学習率のスケジュール、勾配のクリップ、勾配の蓄積、評価と checkpoint の順に読み、実際の学習で記録した値と照らし合わせる。'
+order: 10
+series: nanogpt
+lang: ja
+translationKey: nanogpt-10-training-loop
+slug: 10-training-loop
+draft: false
+upstream:
+  repository: karpathy/nanoGPT
+  commit: 3adf61e154c3fe3fca428ad6bc3818b27a3b8291
+  sourceFiles:
+    - train.py
+    - model.py
+    - config/train_shakespeare_char.py
+experimentId: nanogpt-10-training-loop
+---
+
+import LrSchedule from '../../../../components/LrSchedule.astro';
+import GradNormHistory from '../../../../components/GradNormHistory.astro';
+
+## 1 回の更新で行うこと
+
+ここまでで、バッチの作成（第 2 章）、forward と損失（第 3〜8 章）、勾配の計算（第 9 章）を見てきました。[`train.py` の学習ループ](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L249-L333)は、これらを組み合わせて重みの更新を繰り返します。分散学習（DDP）とログ出力の部分を省略し、コメントを除くと、次の形になります。
+
+```python
+X, Y = get_batch('train')
+while True:
+    lr = get_lr(iter_num) if decay_lr else learning_rate
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+
+    if iter_num % eval_interval == 0 and master_process:
+        losses = estimate_loss()
+        # 検証損失が改善したら checkpoint を保存（後述）
+
+    for micro_step in range(gradient_accumulation_steps):
+        with ctx:
+            logits, loss = model(X, Y)
+            loss = loss / gradient_accumulation_steps
+        X, Y = get_batch('train')
+        scaler.scale(loss).backward()
+    if grad_clip != 0.0:
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+    scaler.step(optimizer)
+    scaler.update()
+    optimizer.zero_grad(set_to_none=True)
+
+    iter_num += 1
+    if iter_num > max_iters:
+        break
+```
+
+1 回の更新（iteration）は、次の順に進みます。
+
+1. その回の学習率を `get_lr()` で決め、optimizer に設定する。
+2. 一定間隔で損失を見積もり、必要なら checkpoint を保存する。
+3. `gradient_accumulation_steps` 回、forward と backward を行い、勾配を蓄積する。
+4. 勾配のノルムを `grad_clip` 以下に制限する。
+5. AdamW で重みを更新し、勾配を消去する。
+
+`scaler` は float16 の学習で使う `GradScaler` で、第 11 章の CPU・float32 の設定では何もしません。以下、optimizer の作り方から順に見ていきます。
+
+## optimizer と weight decay の対象
+
+optimizer は、学習ループの前に [`GPT.configure_optimizers()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L263-L287) で作ります（表示とコメントを省略）。
+
+```python
+param_dict = {pn: p for pn, p in self.named_parameters()}
+param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+optim_groups = [
+    {'params': decay_params, 'weight_decay': weight_decay},
+    {'params': nodecay_params, 'weight_decay': 0.0}
+]
+fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+use_fused = fused_available and device_type == 'cuda'
+extra_args = dict(fused=True) if use_fused else dict()
+optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+```
+
+パラメータを、**2 次元以上の配列**（線形変換の重みと埋め込み）と、**1 次元の配列**（bias と LayerNorm の `weight`）の 2 つのグループに分け、前者にだけ weight decay を適用します。重み共有した `wte` と `lm_head` は、`named_parameters()` に 1 回だけ現れます。
+
+第 11 章のモデル（`bias=False`）では、weight decay を適用するのが 18 個の配列・802,944 要素、適用しないのが LayerNorm の `weight` 9 個・1,152 要素でした。
+
+## AdamW の更新式
+
+`torch.optim.AdamW` は、各重みについて勾配の移動平均を 2 種類保持します。更新回数を $k$、勾配を $g$ とすると、
+
+$$
+m_k = \beta_1 m_{k-1} + (1-\beta_1)\,g,\qquad
+v_k = \beta_2 v_{k-1} + (1-\beta_2)\,g^2
+$$
+
+$$
+\hat m_k = \frac{m_k}{1-\beta_1^k},\qquad
+\hat v_k = \frac{v_k}{1-\beta_2^k},\qquad
+\theta \leftarrow \theta\,(1-\eta\lambda) - \eta\,\frac{\hat m_k}{\sqrt{\hat v_k}+\varepsilon}
+$$
+
+です。$m$ は勾配の平均、$v$ は勾配の 2 乗の平均の見積もりで、$\hat m$・$\hat v$ は初期値 0 による偏りを補正した値です。$\eta$ は学習率、$\lambda$ は `weight_decay`、$\varepsilon = 10^{-8}$ です。[`config/train_shakespeare_char.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/config/train_shakespeare_char.py#L27-L31) では $\beta_1 = 0.9$、$\beta_2 = 0.99$、$\lambda = 0.1$（`train.py` の既定値）です。
+
+更新量は $\hat m/\sqrt{\hat v}$ で決まり、勾配の大きさそのものには比例しません。最初の更新では $\hat m = g$、$\hat v = g^2$ なので、更新量はほぼ $-\eta\,\operatorname{sign}(g)$ になり、**すべての重みがほぼ学習率と同じ幅だけ動きます**。前章で見たように、勾配の大きさはパラメータによって 100 倍以上異なります。AdamW は、重みごとに勾配の典型的な大きさで割ることで、更新幅をそろえています。
+
+$\theta(1-\eta\lambda)$ の項が **weight decay** です。勾配とは別に、毎回の更新で重みを少しずつ 0 に近づけます。AdamW では、この縮小を勾配の正規化と切り離して適用します。
+
+## 学習率のスケジュール
+
+学習率は固定ではなく、[`get_lr()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L230-L242) が更新回数ごとに計算します。
+
+```python
+def get_lr(it):
+    # 1) linear warmup for warmup_iters steps
+    if it < warmup_iters:
+        return learning_rate * (it + 1) / (warmup_iters + 1)
+    # 2) if it > lr_decay_iters, return min learning rate
+    if it > lr_decay_iters:
+        return min_lr
+    # 3) in between, use cosine decay down to min learning rate
+    decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
+    assert 0 <= decay_ratio <= 1
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
+    return min_lr + coeff * (learning_rate - min_lr)
+```
+
+1. **warmup**：最初の `warmup_iters` 回は、学習率を 0 付近から `learning_rate` まで直線的に上げる。
+2. **cosine decay**：`lr_decay_iters` まで、cosine の半周期で `min_lr` まで下げる。
+3. その後は `min_lr` で一定。
+
+学習の初期は重みも AdamW の移動平均も初期値に近く、大きな更新は学習を不安定にしやすくなります。warmup はこの時期の更新幅を抑えます。学習の終盤に学習率を下げると、ミニバッチの選び方による更新のばらつきが小さくなります。
+
+次の図で、スライダーを動かすと `get_lr()` と同じ計算をブラウザで行い、曲線を描き直します。破線は第 11 章の学習で記録した実際の学習率（`learning_rate = 1e-3`、`warmup_iters = 100`、`lr_decay_iters = 2000`、`min_lr = 1e-4`）で、初期設定の実線と重なります。
+
+<LrSchedule lang="ja" />
+
+`lr_decay_iters` を `max_iters`（2000）より大きくすると、学習率が下がりきる前に学習が終わります。参照元の設定ファイルのコメントにあるとおり、通常は `lr_decay_iters` を `max_iters` と同じ値にします。
+
+## 勾配のクリップ
+
+AdamW の前に、[勾配のクリップ](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L306-L309)を行います。
+
+```python
+if grad_clip != 0.0:
+    scaler.unscale_(optimizer)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+```
+
+`clip_grad_norm_()` は、全パラメータの勾配を 1 本のベクトルとみなしたノルム $\lVert g\rVert$ を計算します。$\lVert g\rVert$ が `grad_clip`（$c$）を超える場合は、すべての勾配に $c/\lVert g\rVert$ を掛けます。勾配の向きは変えずに、大きさだけを $c$ に制限する操作です。
+
+次の図は、第 11 章の学習で各更新のクリップ前のノルムを記録したものです。細い線が各更新の値、太い線がその移動平均です。
+
+<GradNormHistory lang="ja" />
+
+2,001 回の更新のうち 1,853 回で、ノルムが `grad_clip = 1.0` を超えていました。最大値は最初の更新の `4.09` です。更新 100〜499 回目の中央値は `1.08` まで下がりますが、その後は大きくなり、1,500 回目以降の中央値は `1.99` でした。更新 1,000 回目以降は、すべての更新でクリップが働いています。
+
+1 バッチが 12 × 64 = 768 文字と小さいこの設定では、勾配のばらつきが大きく、クリップが常に効いている状態です。
+
+## 勾配の蓄積
+
+`gradient_accumulation_steps` は、1 回の更新に使う小さなバッチ（micro-batch）の数です。forward と backward を繰り返すと、PyTorch は勾配を `.grad` に**加算**します。損失を `gradient_accumulation_steps` で割っておくと、蓄積した勾配は、全 micro-batch をまとめた大きなバッチの平均損失の勾配に一致します。
+
+1 回の更新で使うトークン数は、[`train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L101) で次のように計算されます。
+
+```python
+tokens_per_iter = gradient_accumulation_steps * ddp_world_size * batch_size * block_size
+```
+
+第 11 章の設定では 1 × 1 × 12 × 64 = 768 トークン、GPT-2 を再現する既定の設定では 40 × 1 × 12 × 1,024 = 491,520 トークンです（8 GPU の DDP では、各 GPU の蓄積回数が 8 分の 1 になり、合計は同じです）。
+
+micro-batch のループでは、forward の直後に `get_batch('train')` で次のバッチを取得しています。参照元のコメントにあるとおり、GPU が forward の計算を進めている間に、CPU で次のバッチを用意して転送を始めるためです。
+
+## 評価と checkpoint
+
+`eval_interval` 回ごとに、第 8 章の `estimate_loss()` で学習用・検証用の損失を見積もります。checkpoint の保存条件は次のとおりです。
+
+```python
+if losses['val'] < best_val_loss or always_save_checkpoint:
+    best_val_loss = losses['val']
+    if iter_num > 0:
+        checkpoint = {
+            'model': raw_model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'model_args': model_args,
+            'iter_num': iter_num,
+            'best_val_loss': best_val_loss,
+            'config': config,
+        }
+        torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+```
+
+Shakespeare の設定は `always_save_checkpoint = False` なので、検証損失が改善したときだけ保存します。checkpoint には重みだけでなく、AdamW の $m$・$v$ を含む optimizer の状態と、更新回数、設定も含まれます。`init_from='resume'` で学習を再開できるのは、この情報があるためです。
+
+第 11 章の学習では、検証損失が 250 回ごとの評価のたびに下がったため、更新 2,000 回の時点まで毎回保存されました。評価は重みを更新する前に行うので、最後に保存された checkpoint は、2,000 回更新した後の重みです。
+
+## コードで確かめる
+
+第 11 章と同じ構成の学習前のモデルで、パラメータグループ、勾配の蓄積、AdamW の最初の更新を確かめます。データには、乱数で作った token ID を使います。
+
+```python
+import copy
+import math
+import torch
+from model import GPT, GPTConfig
+
+torch.manual_seed(1337)
+model = GPT(GPTConfig(n_layer=4, n_head=4, n_embd=128, block_size=64,
+                      bias=False, vocab_size=65, dropout=0.0))
+optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=1e-3,
+                                       betas=(0.9, 0.99), device_type='cpu')
+
+torch.manual_seed(0)
+X = torch.randint(65, (12, 64))
+Y = torch.randint(65, (12, 64))
+
+# Gradient accumulation: 4 micro-batches of 3 with loss / 4
+full = copy.deepcopy(model)
+full(X, Y)[1].backward()
+accum = copy.deepcopy(model)
+for k in range(4):
+    (accum(X[3 * k:3 * k + 3], Y[3 * k:3 * k + 3])[1] / 4).backward()
+diff = max((a.grad - b.grad).abs().max().item()
+           for a, b in zip(full.parameters(), accum.parameters()))
+print(diff < 1e-6)
+
+# One AdamW step at iteration 0
+model(X, Y)[1].backward()
+total = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+w = model.transformer.h[0].attn.c_attn.weight
+w0, g = w[0, 0].item(), w.grad[0, 0].item()
+lr = 1e-3 * 1 / 101  # get_lr(0) with warmup_iters = 100
+for group in optimizer.param_groups:
+    group['lr'] = lr
+optimizer.step()
+m_hat, v_hat = g, g * g  # bias-corrected moments after the first step
+expected = w0 * (1 - lr * 0.1) - lr * m_hat / (math.sqrt(v_hat) + 1e-8)
+print(round(total.item(), 3), abs(w[0, 0].item() - expected) < 1e-9)
+print(round((w[0, 0].item() - w0) / lr, 4), math.copysign(1, g))
+```
+
+生成環境では、次の結果が得られました。
+
+```text
+number of parameters: 0.80M
+num decayed parameter tensors: 18, with 802,944 parameters
+num non-decayed parameter tensors: 9, with 1,152 parameters
+using fused AdamW: False
+True
+1.333 True
+-0.9994 1.0
+```
+
+2〜4 行目は `configure_optimizers()` の表示で、weight decay の対象が 2 つのグループに分かれていることを示します。続く `True` は、4 つの micro-batch で蓄積した勾配が 12 本のバッチの勾配と一致することを示します。その次の行は、クリップ前の勾配ノルムと、AdamW の更新が上の式と一致することです。最後の行は、更新量を学習率で割った値が、勾配の符号の逆の `-1` にほぼ等しいことを示しています。
+
+## 次の章へ
+
+学習ループは、学習率を決め、勾配を蓄積し、クリップしてから AdamW で更新する手順を繰り返します。AdamW は重みごとに勾配の大きさで割って更新幅をそろえ、weight decay は 2 次元以上の重みだけを少しずつ縮めます。学習率は warmup の後に cosine で下がり、評価で検証損失が改善すると checkpoint が保存されます。
+
+次章では、この学習ループを実際に動かし、損失の推移と、学習の段階ごとに生成される文章を観察します。

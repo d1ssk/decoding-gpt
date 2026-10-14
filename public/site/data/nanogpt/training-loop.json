@@ -1,0 +1,220 @@
+{
+  "experimentId": "nanogpt-10-training-loop",
+  "kind": "trained-character-gpt",
+  "upstreamCommit": "3adf61e154c3fe3fca428ad6bc3818b27a3b8291",
+  "modelSha256": "7c01703240dbec5d554527dc666e35b3df8391d0b117fddc07afcf325a21d11c",
+  "torchVersion": "2.8.0",
+  "device": "cpu",
+  "dtype": "float32",
+  "snapshot": {
+    "iter": 0,
+    "sha256": "4e109aca2f020c1f82f4a0b73528da95b43339785e764a443a1faae81d0c9b6d"
+  },
+  "config": {
+    "eval_interval": 250,
+    "eval_iters": 20,
+    "log_interval": 1,
+    "batch_size": 12,
+    "block_size": 64,
+    "n_layer": 4,
+    "n_head": 4,
+    "n_embd": 128,
+    "dropout": 0.0,
+    "bias": false,
+    "learning_rate": 0.001,
+    "max_iters": 2000,
+    "lr_decay_iters": 2000,
+    "min_lr": 0.0001,
+    "warmup_iters": 100,
+    "weight_decay": 0.1,
+    "beta1": 0.9,
+    "beta2": 0.99,
+    "grad_clip": 1.0,
+    "decay_lr": true,
+    "gradient_accumulation_steps": 1
+  },
+  "parameterGroups": {
+    "decay": [
+      {
+        "name": "transformer.wte.weight",
+        "shape": [65, 128],
+        "numel": 8320
+      },
+      {
+        "name": "transformer.wpe.weight",
+        "shape": [64, 128],
+        "numel": 8192
+      },
+      {
+        "name": "transformer.h.0.attn.c_attn.weight",
+        "shape": [384, 128],
+        "numel": 49152
+      },
+      {
+        "name": "transformer.h.0.attn.c_proj.weight",
+        "shape": [128, 128],
+        "numel": 16384
+      },
+      {
+        "name": "transformer.h.0.mlp.c_fc.weight",
+        "shape": [512, 128],
+        "numel": 65536
+      },
+      {
+        "name": "transformer.h.0.mlp.c_proj.weight",
+        "shape": [128, 512],
+        "numel": 65536
+      },
+      {
+        "name": "transformer.h.1.attn.c_attn.weight",
+        "shape": [384, 128],
+        "numel": 49152
+      },
+      {
+        "name": "transformer.h.1.attn.c_proj.weight",
+        "shape": [128, 128],
+        "numel": 16384
+      },
+      {
+        "name": "transformer.h.1.mlp.c_fc.weight",
+        "shape": [512, 128],
+        "numel": 65536
+      },
+      {
+        "name": "transformer.h.1.mlp.c_proj.weight",
+        "shape": [128, 512],
+        "numel": 65536
+      },
+      {
+        "name": "transformer.h.2.attn.c_attn.weight",
+        "shape": [384, 128],
+        "numel": 49152
+      },
+      {
+        "name": "transformer.h.2.attn.c_proj.weight",
+        "shape": [128, 128],
+        "numel": 16384
+      },
+      {
+        "name": "transformer.h.2.mlp.c_fc.weight",
+        "shape": [512, 128],
+        "numel": 65536
+      },
+      {
+        "name": "transformer.h.2.mlp.c_proj.weight",
+        "shape": [128, 512],
+        "numel": 65536
+      },
+      {
+        "name": "transformer.h.3.attn.c_attn.weight",
+        "shape": [384, 128],
+        "numel": 49152
+      },
+      {
+        "name": "transformer.h.3.attn.c_proj.weight",
+        "shape": [128, 128],
+        "numel": 16384
+      },
+      {
+        "name": "transformer.h.3.mlp.c_fc.weight",
+        "shape": [512, 128],
+        "numel": 65536
+      },
+      {
+        "name": "transformer.h.3.mlp.c_proj.weight",
+        "shape": [128, 512],
+        "numel": 65536
+      }
+    ],
+    "noDecay": [
+      {
+        "name": "transformer.h.0.ln_1.weight",
+        "shape": [128],
+        "numel": 128
+      },
+      {
+        "name": "transformer.h.0.ln_2.weight",
+        "shape": [128],
+        "numel": 128
+      },
+      {
+        "name": "transformer.h.1.ln_1.weight",
+        "shape": [128],
+        "numel": 128
+      },
+      {
+        "name": "transformer.h.1.ln_2.weight",
+        "shape": [128],
+        "numel": 128
+      },
+      {
+        "name": "transformer.h.2.ln_1.weight",
+        "shape": [128],
+        "numel": 128
+      },
+      {
+        "name": "transformer.h.2.ln_2.weight",
+        "shape": [128],
+        "numel": 128
+      },
+      {
+        "name": "transformer.h.3.ln_1.weight",
+        "shape": [128],
+        "numel": 128
+      },
+      {
+        "name": "transformer.h.3.ln_2.weight",
+        "shape": [128],
+        "numel": 128
+      },
+      {
+        "name": "transformer.ln_f.weight",
+        "shape": [128],
+        "numel": 128
+      }
+    ]
+  },
+  "decayParameters": 802944,
+  "noDecayParameters": 1152,
+  "accumulationMaxAbsDifference": 8.940696716308594e-8,
+  "firstStepGradNorm": 3.753450632095337,
+  "adamwExamples": [
+    {
+      "parameter": "transformer.h.0.attn.c_attn.weight",
+      "index": [0, 0],
+      "weightDecay": 0.1,
+      "lr": 9.900990099009901e-6,
+      "weightBefore": 0.0007644157158210874,
+      "gradAfterClip": 3.867939540214138e-6,
+      "m": 3.867939540214137e-7,
+      "v": 1.496095628675197e-13,
+      "mHat": 3.867939540214138e-6,
+      "vHat": 1.4960956286751958e-11,
+      "weightAfter": 0.0007545395055785775
+    },
+    {
+      "parameter": "transformer.h.0.ln_1.weight",
+      "index": [0],
+      "weightDecay": 0.0,
+      "lr": 9.900990099009901e-6,
+      "weightBefore": 1.0,
+      "gradAfterClip": -1.9109362256131135e-5,
+      "m": -1.910936225613113e-6,
+      "v": 3.651677258360495e-12,
+      "mHat": -1.9109362256131135e-5,
+      "vHat": 3.6516772583604917e-10,
+      "weightAfter": 1.0000098943710327
+    }
+  ],
+  "clippedIterations": 1853,
+  "clippedFirst": [0, 1, 2, 3, 4],
+  "clippedLast": [1996, 1997, 1998, 1999, 2000],
+  "maxGradNorm": 4.08899,
+  "finalGradNorm": 2.02871,
+  "verification": {
+    "lrScheduleMatchesHistory": true,
+    "parameterGroupsMatch": true,
+    "gradientAccumulationMatches": true,
+    "adamwStepReproduced": true
+  }
+}

@@ -224,6 +224,88 @@ sample. A component disclosure shows numeric vectors, dot products, and weights.
 The no-JavaScript fallback shows sample zero. `VectorArrow.astro` supports a
 shared extent and an optional dashed second vector for these pair plots.
 
+## Trained tiny GPT (chapters 05–12)
+
+Chapters 05–12 inspect one small model trained with the CPU command from the
+nanoGPT README (`n_layer = 4`, `n_head = 4`, `n_embd = 128`, `block_size = 64`,
+2,000 iterations). `experiments/nanogpt/tiny_gpt.py` reruns `train.py`'s loop
+with the unchanged pinned `model.py`, the same random-draw order, evaluation,
+schedule, AdamW, and clipping (single CPU process, float32). It only adds
+measurements that consume no random numbers: per-iteration learning rate,
+loss, and pre-clipping gradient norm, per-parameter gradient norms at a few
+iterations, and weight snapshots. Snapshots are written to
+`lab/nanogpt/runs/main/` (gitignored) and never published; their SHA-256
+values are recorded in `tiny-training.json` and checked by every downstream
+generator.
+
+Regenerate everything with PyTorch 2.8.0 on CPU, using the local nanoGPT copy
+with prepared `data/shakespeare_char/` (see “Local nanoGPT dataset
+preparation”):
+
+```bash
+cd public/data/nanogpt
+../../../lab/nanogpt/.venv/bin/python train.py config/train_shakespeare_char.py \
+  --device=cpu --compile=False --eval_iters=20 --log_interval=1 --block_size=64 \
+  --batch_size=12 --n_layer=4 --n_head=4 --n_embd=128 --max_iters=2000 \
+  --lr_decay_iters=2000 --dropout=0.0 > /tmp/train.log 2>&1
+../../../lab/nanogpt/.venv/bin/python sample.py --out_dir=out-shakespeare-char \
+  --device=cpu --num_samples=1 --max_new_tokens=300 > /tmp/sample.txt 2>/dev/null
+cd ../../../experiments/nanogpt
+PY=../../lab/nanogpt/.venv/bin/python
+NANOGPT=../../public/data/nanogpt
+$PY tiny_gpt.py $NANOGPT main --reference-log /tmp/train.log
+$PY multi_head_attention.py $NANOGPT
+$PY residual_stream.py $NANOGPT
+$PY probabilities.py $NANOGPT
+$PY loss.py $NANOGPT
+$PY backpropagation.py $NANOGPT
+$PY training_loop.py $NANOGPT
+$PY tiny_samples.py $NANOGPT --checkpoint $NANOGPT/out-shakespeare-char/ckpt.pt \
+  --sample-output /tmp/sample.txt
+$PY tiny_gpt.py $NANOGPT scaling
+$PY nanochat_comparison.py ../../public/data/nanochat-master $NANOGPT/model.py
+cd ../..
+npx prettier --write public/site/data/nanogpt/*.json
+```
+
+`main` writes `tiny-training.json` and compares all 2,001 per-iteration losses
+and the 9 evaluations with the `train.py` log to four decimals.
+`tiny_samples.py` checks that the iteration-2000 snapshot equals the
+`ckpt.pt` written by `train.py` and that its text equals `sample.py`'s output
+(`sample.py` seeds before constructing the model, so the generator does the
+same). The checkpoint after 2,000 updates is the model used by chapters 05–09.
+In the reference environment (Apple M2 CPU) the `train.py` command took about
+34 seconds; the scaling sweep takes roughly 35–60 minutes.
+
+The analysis generators recompute the forward pass step by step (`trace()` in
+`tiny_gpt.py`) and assert agreement with the actual modules. Fixed inputs:
+validation characters 3–66 (`VAL_START = 3`, 64 inputs and 64 shifted targets),
+and 200 random 64-character validation windows drawn with a separate
+`torch.Generator` seed 0 for statistics.
+
+| Artifact                    | Chapter | Contents and checks                                                                                                                                      |
+| --------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `multi-head-attention.json` | 05      | Attention weights (per-mille) for 4 layers × 4 heads, head statistics, zero-ablation losses; concatenation and per-head `c_proj` sum checks              |
+| `residual-stream.json`      | 06      | Sublayer write norms and cosine to the final stream, LayerNorm example, MLP pre-activation histograms; stream decomposition and position-wise MLP checks |
+| `probabilities.json`        | 07      | Final logits and logit-lens top-5 per stage; weight tying, `logits = h @ wteᵀ`, and one `generate()` step reproduced                                     |
+| `loss.json`                 | 08      | Per-character loss and top-5 at iterations 0, 250, 2000; mean −log p and `ignore_index` checks                                                           |
+| `backpropagation.json`      | 09      | Logit gradient, float64 finite differences, tied-weight gradient split, embedding-gradient norms per loss position                                       |
+| `training-loop.json`        | 10      | Optimizer groups, gradient accumulation equivalence, one AdamW step, clipping statistics; `get_lr()` vs recorded rates                                   |
+| `tiny-training.json`        | 09–11   | Configuration, per-iteration history, evaluations, gradient norms, snapshot hashes                                                                       |
+| `tiny-samples.json`         | 11      | `sample.py`-equivalent text at iterations 0, 50, 100, 250, 500, 1000, 2000                                                                               |
+| `scaling.json`              | 12      | 28 runs (model size, training length, context length, dropout) with `estimate_loss()` curves and a fixed 200-window evaluation per split                 |
+| `nanochat-comparison.json`  | 13      | RoPE example computed with nanochat's own functions (offset-only dependence checked) and parameter counts at matching sizes                              |
+
+Components render initial states at build time and recompute only selections
+or browser-side formulas (softmax with temperature/top-k, `get_lr()`, LayerNorm
+under shift/scale). Values computed in the browser are labelled as such in the
+articles. The cross-entropy toy in chapters 08–09 is a hand-set conceptual
+example. Exact values can vary across PyTorch versions and hardware.
+
+The nanochat snapshot in `public/data/nanochat-master/` matches all 53 files of
+nanochat commit `92d63d4e8bb4df75c3b71618f31ddde2378b2bcd` (verified by Git
+blob hashes); `nanochat_comparison.py` checks the SHA-256 of `nanochat/gpt.py`.
+
 ## Sitemaps
 
 The existing `@astrojs/sitemap` integration generates `dist/sitemap-index.xml`

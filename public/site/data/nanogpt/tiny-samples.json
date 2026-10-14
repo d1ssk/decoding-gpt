@@ -1,0 +1,71 @@
+{
+  "experimentId": "nanogpt-11-train-a-tiny-gpt-samples",
+  "kind": "trained-character-gpt",
+  "upstreamCommit": "3adf61e154c3fe3fca428ad6bc3818b27a3b8291",
+  "modelSha256": "7c01703240dbec5d554527dc666e35b3df8391d0b117fddc07afcf325a21d11c",
+  "torchVersion": "2.8.0",
+  "device": "cpu",
+  "dtype": "float32",
+  "settings": {
+    "start": "\n",
+    "maxNewTokens": 300,
+    "temperature": 0.8,
+    "topK": 200,
+    "seed": 1337
+  },
+  "samples": [
+    {
+      "iter": 0,
+      "sha256": "4e109aca2f020c1f82f4a0b73528da95b43339785e764a443a1faae81d0c9b6d",
+      "text": "\n?ONj!ds3Y3w z!!SuVBtOdJf'mX3flTHaLrkWWaDLsig?eeWACZKaXAQzxRrF$ss?PlJ??u??r?&;VXqtYYu;KG$VVfNuVOpt--xUZ!A3,N&RN n?OgVEiGA3FHjmlfyMsOHV\nC3hwaNprr$axqUv,TIH3oW,k;aZZZmu!x'sDRFZHB?hXMMfKFN;G&3x-q$Qp.V$mE\nKB EcPtgPey.FG$jWSPPedoqEu'T,WeliiDVappAPGf&L\n.gQWWVVP-Z MHbo-NnW!rvXMCpI'C$IaKCmvmhvsrmp?v$JL$vxxi3",
+      "train": 4.16765,
+      "val": 4.1649
+    },
+    {
+      "iter": 50,
+      "sha256": "bc4101e044fe9876bd1bede088fa815d742db1ca3b69d987d7a8070c6ee344ee",
+      "text": "\no Nord le w lalled tod s'mer lonaLaud aylsigeeataCedaueseterrors bly, urer fhinntYour Ghan aure t-inond v,\nJRI m?O:\nEino3bnemlfyMIOTV\nC3uwatorrearuuv,\nI 3on,\nGas t me\nH:\n\nFZHeth,MMThe ; iyxeseop.\n$aE\nKBuncPt Peyord,jitPoodondure,Whe iDVapend.\n&L\n. Q\nTheP-, MHio-ln iroXMCAI'y I,\nCRvmipsrepovlJL$er in",
+      "train": null,
+      "val": null
+    },
+    {
+      "iter": 100,
+      "sha256": "676c3be10e07c3c5ba6a567d2bbdfa88b38b0f73b84a452ecd69f0345beeacbe",
+      "text": "\nI bled te w lalleretond tmer tonavat oalls geeatloud, ve tersors bly, beir f ind tour shand ore thinond t,\n\nFo mergo,inoubnds fy se d\nT3uwatorneare g,\nI 3on,\n\nThe mer, serororthenof mor ithe mop.\n\n\nE\n\nBule t ce ard, it todondure, se inoapendof l\n.\n\n\nThePe  tllonln ireand I'y Iangremissrepovl a s fin",
+      "train": null,
+      "val": null
+    },
+    {
+      "iter": 250,
+      "sha256": "9f45f93074243078ecb944218368caa55e83cfc81e54171ae435715496ba8943",
+      "text": "\nI by don tw lalled thand'msh tonave d ay sigeeat,\nSKaresens sors bly, beer f bonolour shatharse thind f t,\nGou myend,inoubees fy, med w twatorreak, wincl on,\nSasha thanserc, the, ar mar ay eshope tha\nWhell t fe ard, itheedondure, se ingapend.\n\nL\nPI\n\nThese, thes ll irod ishe peancinm perepeve aver in",
+      "train": 2.4293,
+      "val": 2.44469
+    },
+    {
+      "iter": 500,
+      "sha256": "489565ec4903296d42a59c1b1228c9fa3dcfa85848f32b7531d645bd86c0a36e",
+      "text": "\nWONIO:\nWe what ler tou fams florave aray,\nSou atlle au sexproors bly, beio f bunolour shan aure\nWhin af torter my hasins bows fors min ghay,\nOngare aind sours and murons cor tor, af mor ithes op.\n\n\nELORCEOP:\nPe ard, it tofon, te, sou wiapene.\n\nLORIUKERI:\nTh lis lo ir, pis, bof shenm porep, tha sprit",
+      "train": 2.27321,
+      "val": 2.31413
+    },
+    {
+      "iter": 1000,
+      "sha256": "59f3e339d4e7447a7ed2494b7c53cbc04544434163963c4ed2ffa19584a68c24",
+      "text": "\nI by done what leart deak shelle prud and thee thee arest\nOr orst hat be off ind to his and ore thing for it.\n\nI'll sins, neme your down wath not huright of that the his conge\nhing thou in esed he and the for thath, is to oneare,\nIf in appuit the. \n\nCome she bord: irvan: I'l I pamem pormpen, a herig",
+      "train": 1.97145,
+      "val": 2.05282
+    },
+    {
+      "iter": 2000,
+      "sha256": "91fc38aba4b9feaf3938023cbab49ef99a6c550991dd14063b36507ffeac28cf",
+      "text": "\nI by done what leave death,\nAnd aproposely beef the are and sors blate though wat our fort\nThine the aftior than whating bods farse dowed\nAnd nears and thou stand murs's consel.\n\nMEOF:\nSir, should and then thee.\n\nGRICHARD one, enceling:\nOr house\nYour to do the all in despery I parve porge,\nAnd shall",
+      "train": 1.76484,
+      "val": 1.88573
+    }
+  ],
+  "verification": {
+    "checkpointCompared": true,
+    "sampleOutputCompared": true
+  }
+}

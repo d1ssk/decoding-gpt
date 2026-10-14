@@ -1,0 +1,164 @@
+---
+import data from '../../public/site/data/nanogpt/backpropagation.json';
+import { backpropUi } from '../lib/backprop';
+import { charLabel, logScale } from '../lib/plot';
+import type { Language } from '../lib/site';
+
+interface Props {
+  lang: Language;
+}
+const { lang } = Astro.props;
+const ui = backpropUi[lang];
+const voc = data.vocabulary;
+const { inputRowNorm, outputRowNorm, rowsInInput } = data.weightTying;
+const present = new Set(rowsInInput);
+const width = 640;
+const height = 300;
+const left = 44;
+const right = 8;
+const mid = 140;
+const half = 110;
+const band = (width - left - right) / voc.length;
+// Each half maps [1e-4, 10] to [0, half] pixels.
+const h = logScale([1e-4, 10], [0, half]);
+const bar = (value: number) => (value > 1e-4 ? h(value) : 0);
+const ticks = [1e-4, 1e-3, 1e-2, 1e-1, 1, 10];
+const tickLabel = (v: number) => (v >= 1 ? String(v) : v.toExponential(0));
+---
+
+<figure class="tied-gradient">
+  <figcaption>{ui.tyingCaption}</figcaption>
+  <p class="note">{ui.tyingNote}</p>
+  <svg
+    viewBox={`0 0 ${width} ${height}`}
+    role="img"
+    aria-label={ui.tyingCaption}
+  >
+    {ticks.map((v) => (
+      <>
+        <path d={`M${left} ${mid - bar(v)}H${width - right}`} class="grid" />
+        <path
+          d={`M${left} ${mid + 4 + bar(v)}H${width - right}`}
+          class="grid"
+        />
+        <text x={left - 4} y={mid - bar(v) + 3} class="tick" text-anchor="end">
+          {tickLabel(v)}
+        </text>
+        {v > 1e-4 && (
+          <text
+            x={left - 4}
+            y={mid + 4 + bar(v) + 3}
+            class="tick"
+            text-anchor="end"
+          >
+            {tickLabel(v)}
+          </text>
+        )}
+      </>
+    ))}
+    {voc.map((char, i) => {
+      const x = left + i * band;
+      const on = present.has(i);
+      return (
+        <g class:list={{ present: on }}>
+          <title>{`${charLabel(char)}: lm_head ${outputRowNorm[i]}, wte ${inputRowNorm[i]}`}</title>
+          <rect
+            x={x + 0.8}
+            y={mid - bar(outputRowNorm[i])}
+            width={band - 1.6}
+            height={bar(outputRowNorm[i])}
+            class="output"
+          />
+          <rect
+            x={x + 0.8}
+            y={mid + 4}
+            width={band - 1.6}
+            height={bar(inputRowNorm[i])}
+            class="input"
+          />
+          <text
+            x={x + band / 2}
+            y={height - 18}
+            class="char"
+            text-anchor="middle"
+          >
+            {charLabel(char)}
+          </text>
+        </g>
+      );
+    })}
+    <text x={left + 4} y={14} class="label">
+      {ui.outputPath}
+    </text>
+    <text x={left + 4} y={height - 32} class="label">
+      {ui.inputPath}
+    </text>
+  </svg>
+  <p class="legend">
+    <span class="key present-key"></span>
+    {ui.rowsInInput}
+  </p>
+</figure>
+
+<style>
+  .tied-gradient {
+    border-block: 1px solid var(--line-strong);
+    margin: 2rem 0;
+    padding: 1.25rem 0;
+  }
+  figcaption {
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+  }
+  .note,
+  .legend {
+    color: var(--ink-secondary);
+    font-size: 0.8rem;
+  }
+  svg {
+    display: block;
+    height: auto;
+    width: 100%;
+  }
+  .grid {
+    stroke: var(--line);
+    stroke-width: 0.6;
+  }
+  .tick,
+  .char {
+    fill: var(--ink-muted);
+    font-family: var(--font-mono);
+    font-size: 8px;
+  }
+  .label {
+    fill: var(--ink-secondary);
+    font-size: 11px;
+  }
+  .output {
+    fill: #276b92;
+    fill-opacity: 0.35;
+  }
+  .input {
+    fill: #a05a20;
+    fill-opacity: 0.35;
+  }
+  .present .output,
+  .present .input {
+    fill-opacity: 0.9;
+  }
+  .present .char {
+    fill: var(--ink);
+    font-weight: 700;
+  }
+  .legend {
+    align-items: center;
+    display: flex;
+    gap: 0.4rem;
+  }
+  .key {
+    background: rgba(39, 107, 146, 0.9);
+    display: inline-block;
+    height: 0.7rem;
+    width: 1.2rem;
+  }
+</style>

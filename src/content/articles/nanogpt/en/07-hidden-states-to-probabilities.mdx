@@ -1,0 +1,202 @@
+---
+title: 'From Hidden States to Probabilities'
+description: 'Turn each position’s vector into vocabulary scores (logits) with the final LayerNorm and lm_head, then connect them to next-token probabilities and generation with softmax, temperature, and top-k.'
+order: 7
+series: nanogpt
+lang: en
+translationKey: nanogpt-07-hidden-states-to-probabilities
+slug: 07-hidden-states-to-probabilities
+draft: false
+upstream:
+  repository: karpathy/nanoGPT
+  commit: 3adf61e154c3fe3fca428ad6bc3818b27a3b8291
+  sourceFiles:
+    - model.py
+    - sample.py
+experimentId: nanogpt-07-hidden-states-to-probabilities
+---
+
+import NextTokenExplorer from '../../../../components/NextTokenExplorer.astro';
+
+## From block outputs to vocabulary scores
+
+After all Transformer blocks, the residual stream is still an array of shape `[B, T, C]`. Each position's vector holds information gathered from the context up to that position, but it is not yet in the form “which token comes next.” This chapter turns these vectors into a score for each vocabulary token and connects those scores to probabilities and generation.
+
+The second half of [`GPT.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L170-L193) is:
+
+```python
+for block in self.transformer.h:
+    x = block(x)
+x = self.transformer.ln_f(x)
+
+if targets is not None:
+    # if we are given some desired targets also calculate the loss
+    logits = self.lm_head(x)
+    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+else:
+    # inference-time mini-optimization: only forward the lm_head on the very last position
+    logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+    loss = None
+```
+
+After the last block, `ln_f` normalizes each position's vector with the same LayerNorm computation seen in the previous chapter. We call the normalized vector the **hidden state** and write it $\boldsymbol{h}_{b,t}$.
+
+`lm_head` is a linear transformation defined in `GPT.__init__()`:
+
+```python
+self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+```
+
+It maps the `C`-component hidden state to a vector with `V` components, one per vocabulary token. Its output is called the **logits**.
+
+```text
+x                 [B, T, C]
+ln_f(x)           [B, T, C]
+lm_head(ln_f(x))  [B, T, V]
+```
+
+With the `lm_head` weight written $W$ (shape `[V, C]`), the score for token `v` at position `t` of sample `b` is the dot product of the hidden state with row `v` of $W$:
+
+$$
+\text{logits}_{b,t,v} = \boldsymbol{h}_{b,t}\cdot W_v
+$$
+
+Each row of $W$ is a `C`-component vector for one vocabulary token. The more the hidden state points in the same direction as that vector, the larger the token's score.
+
+## Reuse the embedding weights
+
+`GPT.__init__()` contains this line:
+
+```python
+self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+```
+
+It makes the token-embedding weight `wte` **the same `Parameter` object** as the `lm_head` weight. Both have shape `[V, C]`. This is called **weight tying**.
+
+The same two-dimensional array serves the input and output sides:
+
+| Where it is used      | Computation                                   | Meaning                                 |
+| --------------------- | --------------------------------------------- | --------------------------------------- |
+| Input side `wte`      | Take row `v`                                  | Represent token `v` with `C` components |
+| Output side `lm_head` | Dot product of each row with the hidden state | Score each token from the hidden state  |
+
+Weight tying keeps a single set of $V \times C$ elements. For the GPT-2 vocabulary (`V = 50,304`, `C = 768`) that is about 38.6 million elements; for this chapter's character-level model (`V = 65`, `C = 128`) it is 8,320. During training, gradients reach this weight from both the input and the output side. Chapter 9 separates and checks those two paths.
+
+## Turn scores into probabilities with softmax
+
+Logits are arbitrary real numbers. Softmax normalizes them into probabilities:
+
+$$
+p_{b,t,v} = \frac{\exp(\text{logits}_{b,t,v})}{\sum_{u=0}^{V-1}\exp(\text{logits}_{b,t,u})}
+$$
+
+At each position, the `V` probabilities are all positive and sum to 1. Adding the same value to every logit leaves the probabilities unchanged, so only the differences between logits matter.
+
+During training, `forward()` computes cross entropy directly from the logits; the next chapter covers the loss. During generation, `generate()` applies softmax explicitly to obtain probabilities and chooses the next token from them.
+
+## Generation uses only the last position
+
+When `forward()` is called without `targets`, it applies `lm_head` only to the last position, because generation needs only the distribution for the token following the input. Indexing with the list `x[:, [-1], :]` keeps the position axis and returns logits of shape `[B, 1, V]`.
+
+[`GPT.generate()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L305-L330) uses these logits to generate one token at a time (comments omitted):
+
+```python
+for _ in range(max_new_tokens):
+    idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+    logits, _ = self(idx_cond)
+    logits = logits[:, -1, :] / temperature
+    if top_k is not None:
+        v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+        logits[logits < v[:, [-1]]] = -float('Inf')
+    probs = F.softmax(logits, dim=-1)
+    idx_next = torch.multinomial(probs, num_samples=1)
+    idx = torch.cat((idx, idx_next), dim=1)
+```
+
+1. If the input is longer than `block_size`, keep only its last `block_size` tokens, because the position embedding has only `block_size` rows.
+2. Divide the last position's logits by `temperature`.
+3. If `top_k` is given, set every logit outside the top `k` to `−∞`.
+4. Apply softmax and choose one token with `torch.multinomial()` according to those probabilities.
+5. Append the chosen token to the input and repeat.
+
+Dividing by the **temperature** $\tau$ makes each probability proportional to $\exp(z_v/\tau)$. With $\tau < 1$, differences between large logits are emphasized and the distribution becomes sharper; with $\tau > 1$, it becomes flatter. As $\tau$ approaches 0, only the token with the largest logit is chosen.
+
+**Top-k** removes low-probability candidates. Their logits become `−∞`, so their probabilities after softmax are 0. The defaults in [`sample.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/sample.py#L17-L18) are `temperature = 0.8` and `top_k = 200`. The character vocabulary has 65 entries, so with `min(top_k, V)` this setting removes no candidates.
+
+## Change the distribution in a trained model
+
+The diagram below uses logits computed by the model trained in chapter 11 at each of the 64 validation characters. Select a character to show the probabilities of the top 12 candidates for the next character, using the input up to that position. The outlined character is the actual next character (the target). Moving the temperature and top-k sliders repeats the `generate()` computation in the browser.
+
+<NextTokenExplorer lang="en" />
+
+The initial position, 56, is the space after the second `Good`. At temperature 1.0, `t` has probability `0.154` and `s` `0.089`, while the target `m` comes third at `0.081`. At temperature 0.5, the probability of `t` rises to `0.366`.
+
+### Read out after intermediate blocks
+
+The table below the chart applies `ln_f` and `lm_head` to the stream not only after the last block but also right after the embedding and after each intermediate block. Reading intermediate values this way is called the **logit lens**. The model is trained to be read this way only at the final stream, so treat the intermediate results as an approximation for inspection.
+
+Aggregating the 64 positions gives the following:
+
+1. **Reading the embedding directly predicts the input character itself.** At all 64 positions, the top candidate equals the input character, with an average probability of `0.953`. With weight tying, token `v`'s embedding and $W_v$ are the same vector, so its dot product with itself is large.
+2. **Each block raises the target's probability.** The average target probability is `0.077` for the embedding, `0.207` after block 0, then `0.249`, `0.280`, and `0.308` after the last block.
+3. **The top candidate matches the target** at 5 positions for the embedding and at 21, 25, 27, and 24 positions after blocks 0–3. The average target probability keeps rising, but the number of top-candidate matches peaks after block 2.
+
+The blocks gradually move vectors that represent the input character toward vectors that predict the next character.
+
+## Verify in code
+
+Using the checkpoint from chapter 11, check weight tying, last-position-only output, and the effect of temperature. The input is the first 57 validation characters; the last is the space after the second `Good`.
+
+```python
+import pickle
+import torch
+from torch.nn import functional as F
+from model import GPT, GPTConfig
+
+ckpt = torch.load('out-shakespeare-char/ckpt.pt', map_location='cpu')
+model = GPT(GPTConfig(**ckpt['model_args']))
+model.load_state_dict(ckpt['model'])
+model.eval()
+
+with open('data/shakespeare_char/meta.pkl', 'rb') as f:
+    meta = pickle.load(f)
+stoi, itos = meta['stoi'], meta['itos']
+text = "GREMIO:\nGood morrow, neighbour Baptista.\n\nBAPTISTA:\nGood morrow,"
+idx = torch.tensor([[stoi[c] for c in text[:57]]])
+
+with torch.no_grad():
+    logits, _ = model(idx)
+    tr = model.transformer
+    x = tr.drop(tr.wte(idx) + tr.wpe(torch.arange(idx.size(1))))
+    for block in tr.h:
+        x = block(x)
+    h = tr.ln_f(x)
+
+print(model.lm_head.weight is tr.wte.weight)
+print(list(logits.shape))
+print(torch.allclose(logits[0, -1], h[0, -1] @ tr.wte.weight.T, atol=1e-5))
+
+for temperature in (1.0, 0.5):
+    probs = F.softmax(logits[0, -1] / temperature, dim=-1)
+    top = torch.topk(probs, 3)
+    print(temperature, [(itos[i], round(p, 3)) for i, p in
+                        zip(top.indices.tolist(), top.values.tolist())])
+```
+
+After the parameter count, the generation environment printed:
+
+```text
+True
+[1, 1, 65]
+True
+1.0 [('t', 0.154), ('s', 0.089), ('m', 0.081)]
+0.5 [('t', 0.366), ('s', 0.121), ('m', 0.101)]
+```
+
+The first line shows that `lm_head` and `wte` share one `Parameter`. The second shows that `forward()` without `targets` returns logits only for the last position. The third shows that the logits equal the dot products of the hidden state with each row of `wte.weight`. The last two lines show that lowering the temperature concentrates probability on the top candidates.
+
+## Next chapter
+
+The logits are dot products between the hidden state, normalized by the final LayerNorm, and each row of the weight shared with the embedding. Softmax turns them into probabilities, and generation adjusts the distribution with temperature and top-k before choosing one token. In the trained model, reading out the stream after each block showed predictions moving from the input character toward the next character.
+
+Training compares this probability distribution with the target token and summarizes how far off it is in one number. The next chapter covers that loss, cross entropy.

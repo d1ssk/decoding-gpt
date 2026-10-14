@@ -1,0 +1,202 @@
+---
+title: '隠れ状態から確率へ'
+description: '最後の LayerNorm と lm_head で各位置のベクトルを語彙のスコア（logits）に変え、softmax・temperature・top-k で次のトークンの確率と生成につなげる。'
+order: 7
+series: nanogpt
+lang: ja
+translationKey: nanogpt-07-hidden-states-to-probabilities
+slug: 07-hidden-states-to-probabilities
+draft: false
+upstream:
+  repository: karpathy/nanoGPT
+  commit: 3adf61e154c3fe3fca428ad6bc3818b27a3b8291
+  sourceFiles:
+    - model.py
+    - sample.py
+experimentId: nanogpt-07-hidden-states-to-probabilities
+---
+
+import NextTokenExplorer from '../../../../components/NextTokenExplorer.astro';
+
+## block の出力から語彙のスコアへ
+
+すべての Transformer block を通った後も、残差ストリームは形状 `[B, T, C]` の配列です。各位置のベクトルは、その位置までの文脈から集めた情報を含んでいますが、まだ「次にどのトークンが来るか」の形にはなっていません。この章では、このベクトルを語彙のトークンごとのスコアに変え、確率と生成につなげます。
+
+[`GPT.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L170-L193) の後半は次のとおりです。
+
+```python
+for block in self.transformer.h:
+    x = block(x)
+x = self.transformer.ln_f(x)
+
+if targets is not None:
+    # if we are given some desired targets also calculate the loss
+    logits = self.lm_head(x)
+    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+else:
+    # inference-time mini-optimization: only forward the lm_head on the very last position
+    logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+    loss = None
+```
+
+最後の block の後、`ln_f` で各位置のベクトルを正規化します。前章で見た LayerNorm と同じ処理です。正規化したベクトルを、ここでは**隠れ状態**と呼び、$\boldsymbol{h}_{b,t}$ と書きます。
+
+続く `lm_head` は、`GPT.__init__()` で次のように定義された線形変換です。
+
+```python
+self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+```
+
+`C` 成分の隠れ状態を、語彙サイズ `V` 成分のベクトルに変換します。この出力を **logits** と呼びます。
+
+```text
+x                 [B, T, C]
+ln_f(x)           [B, T, C]
+lm_head(ln_f(x))  [B, T, V]
+```
+
+`lm_head` の重みを $W$（形状 `[V, C]`）とすると、サンプル `b`・位置 `t` でのトークン `v` のスコアは、隠れ状態と $W$ の行 `v` の内積です。
+
+$$
+\text{logits}_{b,t,v} = \boldsymbol{h}_{b,t}\cdot W_v
+$$
+
+$W$ の各行は、語彙の各トークンに対応する `C` 成分のベクトルです。隠れ状態がそのベクトルと同じ方向を向いているほど、そのトークンのスコアが大きくなります。
+
+## 埋め込みと同じ重みを使う
+
+`GPT.__init__()` には、次の 1 行があります。
+
+```python
+self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+```
+
+トークン埋め込み `wte` の重みを、`lm_head` の重みと**同じ `Parameter` オブジェクト**にしています。どちらも形状は `[V, C]` です。この仕組みを**重み共有（weight tying）**と呼びます。
+
+同じ 2 次元配列が、入力側と出力側で次のように使われます。
+
+| 使われる場所     | 計算                           | 意味                                   |
+| ---------------- | ------------------------------ | -------------------------------------- |
+| 入力側 `wte`     | 行 `v` を取り出す              | トークン `v` を `C` 成分にする         |
+| 出力側 `lm_head` | 各行と隠れ状態の内積を計算する | 隠れ状態から各トークンのスコアを求める |
+
+重み共有によって、$V \times C$ 個の要素を 1 組だけ持てばよくなります。GPT-2 の語彙（`V = 50,304`、`C = 768`）では約 3,860 万要素、この章の文字単位モデル（`V = 65`、`C = 128`）では 8,320 要素です。学習では、この重みに入力側と出力側の両方から勾配が届きます。第 9 章で、その 2 つの経路を分けて確かめます。
+
+## softmax で確率にする
+
+logits は任意の実数なので、確率として使うには softmax で正規化します。
+
+$$
+p_{b,t,v} = \frac{\exp(\text{logits}_{b,t,v})}{\sum_{u=0}^{V-1}\exp(\text{logits}_{b,t,u})}
+$$
+
+各位置で、`V` 個の確率はすべて正で、合計は 1 になります。すべての logits に同じ値を足しても確率は変わらないので、意味を持つのは logits どうしの差です。
+
+学習時は、`forward()` が logits から直接 cross entropy を計算します。損失の詳細は次章で扱います。生成時は、`generate()` が softmax を明示的に適用して確率を作り、そこから次のトークンを選びます。
+
+## 生成では最後の位置だけを使う
+
+`targets` を渡さずに `forward()` を呼ぶと、`lm_head` を最後の位置にだけ適用します。生成で必要なのは、入力の最後に続くトークンの分布だけだからです。`x[:, [-1], :]` とリストで添字を渡すことで、位置の軸を残して形状 `[B, 1, V]` の logits を返します。
+
+[`GPT.generate()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L305-L330) は、この logits を使って 1 トークンずつ生成します（コメントを省略しています）。
+
+```python
+for _ in range(max_new_tokens):
+    idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+    logits, _ = self(idx_cond)
+    logits = logits[:, -1, :] / temperature
+    if top_k is not None:
+        v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+        logits[logits < v[:, [-1]]] = -float('Inf')
+    probs = F.softmax(logits, dim=-1)
+    idx_next = torch.multinomial(probs, num_samples=1)
+    idx = torch.cat((idx, idx_next), dim=1)
+```
+
+1. 入力が `block_size` より長ければ、末尾の `block_size` トークンだけを残します。位置埋め込みが `block_size` 行しかないためです。
+2. 最後の位置の logits を `temperature` で割ります。
+3. `top_k` が指定されていれば、上位 `k` 個以外の logits を `−∞` にします。
+4. softmax で確率にし、`torch.multinomial()` でその確率に従って 1 つのトークンを選びます。
+5. 選んだトークンを入力の末尾に追加し、繰り返します。
+
+**temperature** $\tau$ で割ると、確率は $\exp(z_v/\tau)$ に比例します。$\tau < 1$ では大きな logits の差が強調されて分布が鋭くなり、$\tau > 1$ では平らになります。$\tau$ を 0 に近づけると、最大の logits を持つトークンだけが選ばれるようになります。
+
+**top-k** は、確率の低い候補を除外します。除外したトークンの logits は `−∞` なので、softmax 後の確率は 0 です。[`sample.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/sample.py#L17-L18) の既定値は `temperature = 0.8`、`top_k = 200` です。文字単位の語彙は 65 種類なので、`min(top_k, V)` により、この設定では候補を除外しません。
+
+## 学習済みモデルで分布を操作する
+
+次の図は、第 11 章で学習したモデルが、検証データの 64 文字の各位置で計算した logits を使っています。文字を選ぶと、その位置までを入力として予測した次の文字の確率を、上位 12 候補について表示します。枠の付いた文字が実際の次の文字（正解）です。temperature と top-k のスライダーを動かすと、ブラウザで `generate()` と同じ手順の計算をやり直します。
+
+<NextTokenExplorer lang="ja" />
+
+初期表示の位置 56 は、2 つ目の `Good` の後の空白です。temperature 1.0 では、`t` が `0.154`、`s` が `0.089` で、正解の `m` は `0.081` で 3 番目です。temperature を 0.5 にすると、`t` の確率は `0.366` まで上がります。
+
+### 途中の block で読み出す
+
+図の下の表は、最後の block の出力だけでなく、埋め込みの直後や途中の block の後のストリームにも `ln_f` と `lm_head` を適用した結果です。途中の値をこのように読む手法は **logit lens** と呼ばれます。モデルは最後のストリームだけをこの方法で読むように学習しているので、途中の結果は観察用の近似として扱います。
+
+64 か所の位置を集計すると、次のことがわかりました。
+
+1. **埋め込みを直接読むと、入力の文字そのものを予測します。** 64 か所すべてで、最上位の候補は入力の文字と一致し、その確率の平均は `0.953` でした。重み共有により、トークン `v` の埋め込みと $W_v$ は同じベクトルなので、自分自身との内積が大きくなります。
+2. **block を通るごとに、正解の確率が上がります。** 正解の確率の平均は、埋め込みで `0.077`、block 0 の後で `0.207`、以降 `0.249`、`0.280`、最後の block の後で `0.308` でした。
+3. **最上位の候補が正解と一致する位置**は、埋め込みで 5 か所、block 0〜3 の後でそれぞれ 21、25、27、24 か所でした。正解の確率の平均は増え続けますが、最上位の一致数は block 2 の後が最大でした。
+
+block は、入力の文字を表すベクトルを、次の文字を予測するベクトルへ少しずつ変えていきます。
+
+## コードで確かめる
+
+第 11 章のチェックポイントを使い、重み共有と最後の位置だけの出力、temperature の効果を確かめます。入力は検証データの先頭 57 文字で、最後の文字は 2 つ目の `Good` の後の空白です。
+
+```python
+import pickle
+import torch
+from torch.nn import functional as F
+from model import GPT, GPTConfig
+
+ckpt = torch.load('out-shakespeare-char/ckpt.pt', map_location='cpu')
+model = GPT(GPTConfig(**ckpt['model_args']))
+model.load_state_dict(ckpt['model'])
+model.eval()
+
+with open('data/shakespeare_char/meta.pkl', 'rb') as f:
+    meta = pickle.load(f)
+stoi, itos = meta['stoi'], meta['itos']
+text = "GREMIO:\nGood morrow, neighbour Baptista.\n\nBAPTISTA:\nGood morrow,"
+idx = torch.tensor([[stoi[c] for c in text[:57]]])
+
+with torch.no_grad():
+    logits, _ = model(idx)
+    tr = model.transformer
+    x = tr.drop(tr.wte(idx) + tr.wpe(torch.arange(idx.size(1))))
+    for block in tr.h:
+        x = block(x)
+    h = tr.ln_f(x)
+
+print(model.lm_head.weight is tr.wte.weight)
+print(list(logits.shape))
+print(torch.allclose(logits[0, -1], h[0, -1] @ tr.wte.weight.T, atol=1e-5))
+
+for temperature in (1.0, 0.5):
+    probs = F.softmax(logits[0, -1] / temperature, dim=-1)
+    top = torch.topk(probs, 3)
+    print(temperature, [(itos[i], round(p, 3)) for i, p in
+                        zip(top.indices.tolist(), top.values.tolist())])
+```
+
+パラメータ数の表示に続き、生成環境では次の結果が得られました。
+
+```text
+True
+[1, 1, 65]
+True
+1.0 [('t', 0.154), ('s', 0.089), ('m', 0.081)]
+0.5 [('t', 0.366), ('s', 0.121), ('m', 0.101)]
+```
+
+1 行目は、`lm_head` と `wte` が同じ `Parameter` であることを示します。2 行目は、`targets` なしの `forward()` が最後の位置の logits だけを返すことを示します。3 行目は、logits が隠れ状態と `wte.weight` の各行の内積に一致することを示します。最後の 2 行は、temperature を下げると上位の候補に確率が集まることを示しています。
+
+## 次の章へ
+
+最後の LayerNorm で正規化した隠れ状態と、埋め込みと共有する重みの各行との内積が、語彙のスコア logits になります。softmax で確率にし、生成では temperature と top-k で分布を調整してから 1 トークンを選びます。学習済みモデルでは、block を通るごとに、ストリームの読み出し結果が入力の文字から次の文字の予測へと移っていきました。
+
+学習では、この確率分布を正解のトークンと比べ、どれだけ外れているかを 1 つの数値にします。次章では、その損失 cross entropy を扱います。

@@ -1,0 +1,241 @@
+---
+import { lossUi } from '../lib/loss';
+import { softmax } from '../lib/plot';
+import type { Language } from '../lib/site';
+
+interface Props {
+  lang: Language;
+  showGradient?: boolean;
+}
+const { lang, showGradient = false } = Astro.props;
+const ui = lossUi[lang];
+const labels = ['a', 'b', 'c', 'd', 'e'];
+const initialLogits = [2, 1, 0.5, -1, 0];
+const initialTarget = 2;
+const probs = softmax(initialLogits);
+const id = `ce-${lang}-${showGradient ? 'g' : 'l'}`;
+const gradients = probs.map((p, i) => p - (i === initialTarget ? 1 : 0));
+const gradStyle = (g: number) =>
+  g >= 0
+    ? `left: 50%; width: ${(g * 50).toFixed(1)}%`
+    : `right: 50%; width: ${(-g * 50).toFixed(1)}%`;
+---
+
+<figure
+  class="cross-entropy"
+  data-cross-entropy
+  data-gradient={showGradient ? 'true' : 'false'}
+>
+  <figcaption>{ui.toyCaption}</figcaption>
+  <p class="note">{ui.toyNote}</p>
+  <div
+    class="table-scroll"
+    role="region"
+    aria-label={ui.toyCaption}
+    tabindex="0"
+  >
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">{ui.target}</th>
+          <th scope="col">token</th>
+          <th scope="col">{ui.logit}</th>
+          <th scope="col">{ui.prob}</th>
+          {showGradient && <th scope="col">{ui.gradient}</th>}
+        </tr>
+      </thead>
+      <tbody>
+        {labels.map((label, i) => (
+          <tr data-row={i} class:list={{ target: i === initialTarget }}>
+            <td>
+              <input
+                type="radio"
+                name={id}
+                value={i}
+                checked={i === initialTarget}
+                aria-label={`${ui.target}: ${label}`}
+                disabled
+              />
+            </td>
+            <th scope="row">{label}</th>
+            <td class="slider">
+              <input
+                type="range"
+                min="-4"
+                max="4"
+                step="0.1"
+                value={initialLogits[i]}
+                data-logit={i}
+                aria-label={`${ui.logit} ${label}`}
+                disabled
+              />
+              <output data-logit-value={i}>
+                {initialLogits[i].toFixed(1)}
+              </output>
+            </td>
+            <td class="bar-cell">
+              <span class="track">
+                <span
+                  class="fill"
+                  data-prob-bar={i}
+                  style={`width: ${(probs[i] * 100).toFixed(1)}%`}
+                />
+              </span>
+              <output data-prob={i}>{probs[i].toFixed(3)}</output>
+            </td>
+            {showGradient && (
+              <td class="bar-cell gradient">
+                <span class="track centered">
+                  <span
+                    class="fill grad"
+                    data-grad-bar={i}
+                    style={gradStyle(gradients[i])}
+                  />
+                </span>
+                <output data-grad={i}>{gradients[i].toFixed(3)}</output>
+              </td>
+            )}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+  <p class="loss" aria-live="polite">
+    {ui.loss} ={' '}
+    <output data-loss>{(-Math.log(probs[initialTarget])).toFixed(3)}</output>
+  </p>
+  {showGradient && <p class="note">{ui.gradientNote}</p>}
+</figure>
+
+<script>
+  import { softmax } from '../lib/plot';
+
+  document
+    .querySelectorAll<HTMLElement>('[data-cross-entropy]')
+    .forEach((root) => {
+      const sliders = [
+        ...root.querySelectorAll<HTMLInputElement>('[data-logit]'),
+      ];
+      const radios = [
+        ...root.querySelectorAll<HTMLInputElement>('input[type="radio"]'),
+      ];
+      const showGradient = root.dataset.gradient === 'true';
+      const update = () => {
+        const logits = sliders.map((s) => Number(s.value));
+        const target = radios.findIndex((r) => r.checked);
+        const probs = softmax(logits);
+        probs.forEach((p, i) => {
+          root.querySelector(`[data-logit-value="${i}"]`)!.textContent =
+            logits[i].toFixed(1);
+          root.querySelector<HTMLElement>(
+            `[data-prob-bar="${i}"]`,
+          )!.style.width = `${(p * 100).toFixed(1)}%`;
+          root.querySelector(`[data-prob="${i}"]`)!.textContent = p.toFixed(3);
+          root
+            .querySelector(`[data-row="${i}"]`)!
+            .classList.toggle('target', i === target);
+          if (showGradient) {
+            const g = p - (i === target ? 1 : 0);
+            const bar = root.querySelector<HTMLElement>(
+              `[data-grad-bar="${i}"]`,
+            )!;
+            bar.style.left = g < 0 ? '' : '50%';
+            bar.style.right = g < 0 ? '50%' : '';
+            bar.style.width = `${(Math.abs(g) * 50).toFixed(1)}%`;
+            root.querySelector(`[data-grad="${i}"]`)!.textContent =
+              g.toFixed(3);
+          }
+        });
+        root.querySelector('[data-loss]')!.textContent = (-Math.log(
+          probs[target],
+        )).toFixed(3);
+      };
+      sliders.forEach((control) => {
+        control.disabled = false;
+        control.addEventListener('input', update);
+      });
+      radios.forEach((control) => {
+        control.disabled = false;
+        control.addEventListener('change', update);
+      });
+    });
+</script>
+
+<style>
+  .cross-entropy {
+    border-block: 1px solid var(--line-strong);
+    margin: 2rem 0;
+    padding: 1.25rem 0;
+  }
+  figcaption {
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+  }
+  .note {
+    color: var(--ink-secondary);
+    font-size: 0.8rem;
+  }
+  .table-scroll {
+    overflow-x: auto;
+  }
+  table {
+    font-size: 0.8rem;
+    margin: 1rem 0;
+    min-width: 30rem;
+  }
+  th,
+  td {
+    vertical-align: middle;
+  }
+  tr.target th {
+    color: var(--accent);
+  }
+  .slider {
+    align-items: center;
+    display: flex;
+    gap: 0.5rem;
+  }
+  .slider input {
+    min-width: 6rem;
+    width: 100%;
+  }
+  output {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+  .bar-cell {
+    min-width: 8rem;
+  }
+  .track {
+    background: var(--paper-subtle);
+    display: block;
+    height: 0.7rem;
+    margin-bottom: 0.2rem;
+    position: relative;
+  }
+  .fill {
+    background: #276b92;
+    display: block;
+    height: 100%;
+  }
+  tr.target .fill:not(.grad) {
+    background: var(--accent);
+  }
+  .centered::after {
+    background: var(--ink-muted);
+    content: '';
+    height: 100%;
+    left: 50%;
+    position: absolute;
+    top: 0;
+    width: 1px;
+  }
+  .grad {
+    background: #a05a20;
+    position: absolute;
+    top: 0;
+  }
+  .loss {
+    font-size: 0.9rem;
+  }
+</style>

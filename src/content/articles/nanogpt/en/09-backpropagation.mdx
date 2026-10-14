@@ -1,0 +1,212 @@
+---
+title: 'Backpropagation'
+description: 'See how loss.backward() computes the gradient of every weight from the loss, through the logit gradient, the residual stream, the tied weight, and gradient flow under the causal mask.'
+order: 9
+series: nanogpt
+lang: en
+translationKey: nanogpt-09-backpropagation
+slug: 09-backpropagation
+draft: false
+upstream:
+  repository: karpathy/nanoGPT
+  commit: 3adf61e154c3fe3fca428ad6bc3818b27a3b8291
+  sourceFiles:
+    - train.py
+    - model.py
+experimentId: nanogpt-09-backpropagation
+---
+
+import CrossEntropyToy from '../../../../components/CrossEntropyToy.astro';
+import GradientFlow from '../../../../components/GradientFlow.astro';
+import TiedGradient from '../../../../components/TiedGradient.astro';
+import GradientNorms from '../../../../components/GradientNorms.astro';
+
+## From the loss to every weight
+
+The previous chapter summarized a batch of predictions as a single loss $\mathcal{L}$. To reduce it, we need to know how the loss changes when each weight $\theta$ moves slightly: the **gradient** $\partial\mathcal{L}/\partial\theta$. Moving the weight a little against its gradient reduces the loss.
+
+$$
+\theta \leftarrow \theta - \eta\,\frac{\partial\mathcal{L}}{\partial\theta}
+$$
+
+$\eta$ is the learning rate. The next chapter covers AdamW, the update rule nanoGPT actually uses.
+
+This chapter's model has about 800,000 weights. The following lines from [the training loop in `train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L299-L305) compute all of their gradients at once:
+
+```python
+with ctx:
+    logits, loss = model(X, Y)
+    loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
+# immediately async prefetch next batch while model is doing the forward pass on the GPU
+X, Y = get_batch('train')
+# backward pass, with gradient scaling if training in fp16
+scaler.scale(loss).backward()
+```
+
+`scaler` enlarges the loss when training in float16. With chapter 11's settings (float32 on CPU) it does nothing, so the effective call is `loss.backward()`. When it finishes, every `Parameter` in the model has a gradient of the same shape in `.grad`.
+
+## Trace backward with the chain rule
+
+PyTorch records the operations used in the forward computation. `backward()` walks that record **in reverse order** and applies the chain rule at each operation.
+
+When an operation produces output $\boldsymbol{v}$ from input $\boldsymbol{u}$, the gradient of the loss with respect to $\boldsymbol{u}$ follows from the gradient with respect to $\boldsymbol{v}$:
+
+$$
+\frac{\partial\mathcal{L}}{\partial u_i} = \sum_j \frac{\partial v_j}{\partial u_i}\,\frac{\partial\mathcal{L}}{\partial v_j}
+$$
+
+Each operation uses only the gradient arriving from behind, $\partial\mathcal{L}/\partial\boldsymbol{v}$, and its own input–output relationship $\partial v_j/\partial u_i$. Repeating this from the loss at the exit back to the embeddings at the entrance is called **backpropagation**. The backward computation costs roughly twice the forward computation, with no need to rerun the forward pass once per weight.
+
+## Starting point: the logit gradient
+
+The backward computation starts at the loss. Differentiating one position's cross entropy $\ell = -z_y + \log\sum_u \exp(z_u)$ with respect to logit $z_v$ gives:
+
+$$
+\frac{\partial\ell}{\partial z_v} = p_v - [v = y]
+$$
+
+$[v = y]$ is 1 for the target token and 0 otherwise. nanoGPT's loss averages over $N = B\cdot T$ positions, so each position's gradient is further multiplied by $1/N$.
+
+The diagram below adds the gradient $p - y$ to the five-token example from the previous chapter. The target's logit receives a negative gradient, so moving against the gradient raises it. Every other token receives a positive gradient proportional to its probability. As the target probability approaches 1, all gradients approach 0.
+
+<CrossEntropyToy lang="en" showGradient />
+
+## Trace back through the layers
+
+The logit gradient passes back through `lm_head`, `ln_f`, and each block in reverse order until it reaches the embeddings. Here are the rules for the main operations.
+
+For a **linear transformation** $\boldsymbol{y} = W\boldsymbol{x}$, the gradient with respect to the input is $W^\top\,\partial\mathcal{L}/\partial\boldsymbol{y}$, and the gradient with respect to the weight is the outer product of $\partial\mathcal{L}/\partial\boldsymbol{y}$ and $\boldsymbol{x}$. The same weight is used at every position in the batch, so **the weight gradient is the sum of the outer products over `B·T` positions**.
+
+For a **residual connection** $\boldsymbol{x}_{l+1} = \boldsymbol{x}_l + f(\boldsymbol{x}_l)$:
+
+$$
+\frac{\partial\mathcal{L}}{\partial\boldsymbol{x}_l}
+= \frac{\partial\mathcal{L}}{\partial\boldsymbol{x}_{l+1}}
++ \left(\frac{\partial f}{\partial\boldsymbol{x}_l}\right)^{\!\top}\frac{\partial\mathcal{L}}{\partial\boldsymbol{x}_{l+1}}
+$$
+
+The first term is the gradient that reaches the previous layer unchanged, bypassing the sublayer. It corresponds to the residual-stream advantage noted in chapter 6.
+
+In **attention**, the output at position `t` was a weighted sum of the values at itself and earlier positions. Backward, the gradient at position `t` is distributed to earlier positions according to the attention weights. Future positions, whose weights are 0 under the causal mask, receive no gradient.
+
+The diagram below uses the model trained in chapter 11. It shows the norm of the gradient of one position's loss $\ell_t$ with respect to the embedding sum $\boldsymbol{x}$ (`wte` plus `wpe`) at every position. Select a character to show, as background shading, the gradient of the loss for predicting the next character at that position. Struck-through characters come after position `t`, and their gradients are all 0.
+
+<GradientFlow lang="en" />
+
+The initial position, 61, is the loss for predicting `w` from the second `o` of `morrow`. The largest gradient norms go to the word-initial `m` (position 57, `26.1`) and the preceding `r` (position 60, `24.4`), both larger than the gradient at position 61 itself (`16.4`). The gradient shows which input positions the information used for the prediction is tied to.
+
+Gradient norms exceed 1 because the embeddings are small (standard deviation `0.073` at position 52, as seen in chapter 6) and LayerNorm divides by that small standard deviation.
+
+## The tied weight receives gradients from two paths
+
+As seen in chapter 7, `wte.weight` is a single `Parameter` used as both the input embedding and the output `lm_head`. When one `Parameter` is used in several places, autograd **adds the gradients from each path** into `.grad`.
+
+The diagram below splits, by path, the gradient norm reaching each of the 65 rows of `wte.weight` for the 64 validation characters. To separate them, we make a copy with untied weights, run backward on the same loss, and check that the sum of the two gradients equals the gradient of the tied weight.
+
+<TiedGradient lang="en" />
+
+The two paths deliver gradients differently:
+
+- **Output side**: at every position, the softmax denominator includes the logits of all tokens, so all 65 rows receive gradient.
+- **Input side**: only rows taken out as embeddings receive gradient. Only the rows of the 32 distinct characters in these 64 characters were nonzero.
+
+For this input, the input-side gradients (norms `0.12`–`3.0`) are larger than the output-side ones (`0.0001`–`0.77`). The row with the largest output-side gradient was `o` (`0.77`); on the input side it was `n` (`3.0`).
+
+## Gradient sizes differ between parameters
+
+Finally, look at the per-parameter gradient norms recorded during chapter 11's training run. The values are before clipping.
+
+<GradientNorms lang="en" />
+
+- **At update 0**, the `c_proj` weights of attention and the MLP in layers 0 and 1 (`1.40`–`1.61`) were at the top. In contrast, `c_attn` and `c_fc` in each layer were `0.36`–`0.53`. The `c_proj` weights are small because of the special initialization from chapter 6, so the gradient passed back through $W^\top$ to the layers before them is smaller.
+- **From update 100 on**, `wte` (`0.64`–`1.29`) and `wpe` were the largest.
+- The LayerNorm `weight` gradients stayed around `0.001`–`0.05` at every point, smaller than the other parameters.
+
+Gradient sizes differ by more than a factor of 100 between parameters, which is one reason AdamW, covered in the next chapter, adapts the step size for each weight.
+
+## Verify in code
+
+Using the checkpoint from chapter 11, check the four properties discussed in this chapter.
+
+```python
+import copy
+import pickle
+import torch
+from torch import nn
+from torch.nn import functional as F
+from model import GPT, GPTConfig
+
+ckpt = torch.load('out-shakespeare-char/ckpt.pt', map_location='cpu')
+model = GPT(GPTConfig(**ckpt['model_args']))
+model.load_state_dict(ckpt['model'])
+model.eval()
+
+with open('data/shakespeare_char/meta.pkl', 'rb') as f:
+    stoi = pickle.load(f)['stoi']
+text = "GREMIO:\nGood morrow, neighbour Baptista.\n\nBAPTISTA:\nGood morrow, "
+ids = [stoi[c] for c in text]
+idx = torch.tensor([ids[:-1]])
+targets = torch.tensor([ids[1:]])
+V = model.config.vocab_size
+
+# 1. The gradient with respect to the logits
+logits, _ = model(idx, targets)
+logits = logits.detach().requires_grad_()
+F.cross_entropy(logits.view(-1, V), targets.view(-1)).backward()
+p = F.softmax(logits.detach(), dim=-1)
+print(torch.allclose(logits.grad, (p - F.one_hot(targets, V)) / 64, atol=1e-7))
+
+# 2. Autograd against a central difference (float64)
+m64 = copy.deepcopy(model).double()
+w = m64.transformer.h[0].attn.c_attn.weight
+m64(idx, targets)[1].backward()
+eps = 1e-6
+with torch.no_grad():
+    w[0, 0] += eps
+    plus = m64(idx, targets)[1].item()
+    w[0, 0] -= 2 * eps
+    minus = m64(idx, targets)[1].item()
+    w[0, 0] += eps
+print(f"{w.grad[0, 0].item():.10f} {(plus - minus) / (2 * eps):.10f}")
+
+# 3. The tied weight receives the sum of two paths
+model.zero_grad()
+model(idx, targets)[1].backward()
+untied = copy.deepcopy(model)
+untied.lm_head.weight = nn.Parameter(untied.lm_head.weight.detach().clone())
+untied.zero_grad()
+untied(idx, targets)[1].backward()
+g_in = untied.transformer.wte.weight.grad
+g_out = untied.lm_head.weight.grad
+print(torch.allclose(g_in + g_out, model.lm_head.weight.grad, atol=1e-7))
+print((g_in.abs().sum(dim=1) > 0).sum().item(), len(set(ids[:-1])))
+
+# 4. No gradient flows to later positions
+emb = model.transformer.wte(idx) + model.transformer.wpe(torch.arange(64))
+emb = emb.detach().requires_grad_()
+x = emb
+for block in model.transformer.h:
+    x = block(x)
+out = model.lm_head(model.transformer.ln_f(x))
+F.cross_entropy(out[0, 30][None], targets[0, 30][None]).backward()
+norms = emb.grad[0].norm(dim=-1)
+print(norms[31:].max().item(), [round(v, 2) for v in norms[28:31].tolist()])
+```
+
+After the parameter count, the generation environment printed:
+
+```text
+True
+0.0049686514 0.0049686513
+True
+32 32
+0.0 [5.02, 5.49, 5.86]
+```
+
+The first line shows that the logit gradient equals $(p - y)/N$. The second compares, for layer 0's `c_attn.weight[0, 0]`, the autograd gradient with the value obtained from the loss difference after moving the weight by $\pm 10^{-6}$. The third and fourth lines show that the tied weight's gradient is the sum of the two paths and that the input-side gradient reaches only the rows of the 32 distinct characters in the input. The last line shows that the loss at position 30 sends zero gradient to positions 31 and later, followed by the gradient norms at positions 28–30.
+
+## Next chapter
+
+`loss.backward()` walks the operations recorded in the forward pass in reverse and applies the chain rule to compute every parameter's gradient. The starting logit gradient is $p - y$; residual connections pass gradients straight to earlier layers, and the causal mask makes gradients to future positions zero. The tied weight receives the sum of its input-side and output-side gradients.
+
+Gradients tell us which way to move the weights. The next chapter reads the whole training loop, including AdamW, which actually updates the weights from the gradients, the learning-rate schedule, and gradient clipping.

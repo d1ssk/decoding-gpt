@@ -1,0 +1,178 @@
+---
+title: '小規模な GPT を学習させる'
+description: '参照元リポジトリの README が示す CPU 向けの設定で文字単位の GPT を実際に学習させ、損失の推移と、学習の段階ごとに生成される文章を比べる。'
+order: 11
+series: nanogpt
+lang: ja
+translationKey: nanogpt-11-train-a-tiny-gpt
+slug: 11-train-a-tiny-gpt
+draft: false
+upstream:
+  repository: karpathy/nanoGPT
+  commit: 3adf61e154c3fe3fca428ad6bc3818b27a3b8291
+  sourceFiles:
+    - README.md
+    - train.py
+    - sample.py
+    - config/train_shakespeare_char.py
+    - data/shakespeare_char/prepare.py
+experimentId: nanogpt-11-train-a-tiny-gpt
+---
+
+import TrainingRun from '../../../../components/TrainingRun.astro';
+
+## README の設定で学習する
+
+第 1 章から第 10 章まで、nanoGPT のデータ、モデル、損失、勾配、学習ループを順に読んできました。この章では、それらを実際に動かして、文字単位の小さな GPT を学習させます。
+
+参照元リポジトリの [README](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/README.md#quick-start) には、GPU のない環境向けに、Tiny Shakespeare の文字単位モデルを CPU で学習するコマンドが示されています。nanoGPT のディレクトリで、データを準備してから学習します。
+
+```bash
+python data/shakespeare_char/prepare.py
+python train.py config/train_shakespeare_char.py --device=cpu --compile=False \
+  --eval_iters=20 --log_interval=1 --block_size=64 --batch_size=12 \
+  --n_layer=4 --n_head=4 --n_embd=128 --max_iters=2000 --lr_decay_iters=2000 \
+  --dropout=0.0
+```
+
+`prepare.py` は第 1 章で読んだスクリプトで、`train.bin`・`val.bin`・`meta.pkl` を作ります。`train.py` は、まず `config/train_shakespeare_char.py` の設定を読み込み、続く `--key=value` で一部を上書きします。最終的な設定は次のとおりです。
+
+| 設定                               | 値               | 由来                         |
+| ---------------------------------- | ---------------- | ---------------------------- |
+| `n_layer` / `n_head` / `n_embd`    | 4 / 4 / 128      | コマンドライン               |
+| `block_size` / `batch_size`        | 64 / 12          | コマンドライン               |
+| `dropout`                          | 0.0              | コマンドライン               |
+| `bias`                             | `False`          | `train.py` の既定値          |
+| `learning_rate` / `min_lr`         | 1e-3 / 1e-4      | 設定ファイル                 |
+| `max_iters` / `lr_decay_iters`     | 2000 / 2000      | コマンドライン               |
+| `warmup_iters`                     | 100              | 設定ファイル                 |
+| `beta1` / `beta2` / `weight_decay` | 0.9 / 0.99 / 0.1 | 既定値・設定ファイル・既定値 |
+| `grad_clip`                        | 1.0              | `train.py` の既定値          |
+| `eval_interval` / `eval_iters`     | 250 / 20         | 設定ファイル・コマンドライン |
+| `device` / `compile`               | `cpu` / `False`  | コマンドライン               |
+
+語彙サイズ 65 は `meta.pkl` から読み込まれます。パラメータ数は 804,096 で、起動時の表示（位置埋め込みを除く）は `0.80M` です。1 回の更新で使うトークン数は 12 × 64 = 768 なので、2,001 回の更新で約 154 万トークンを処理します。学習データ `train.bin` は 1,003,854 トークンなので、全体を約 1.5 周する計算です。
+
+## 学習の記録を読む
+
+この記事で使った環境（Apple M2 の CPU、PyTorch 2.8.0）では、学習は約 34 秒で終わりました。README には CPU で約 3 分とあり、所要時間は環境によって異なります。`train.py` は、次のような行を出力します。
+
+```text
+tokens per iteration will be: 768
+found vocab_size = 65 (inside data/shakespeare_char/meta.pkl)
+Initializing a new model from scratch
+number of parameters: 0.80M
+num decayed parameter tensors: 18, with 802,944 parameters
+num non-decayed parameter tensors: 9, with 1,152 parameters
+using fused AdamW: False
+step 0: train loss 4.1676, val loss 4.1649
+iter 0: loss 4.1828, time 273.30ms, mfu -100.00%
+iter 1: loss 4.1373, time 21.82ms, mfu -100.00%
+...
+step 2000: train loss 1.7648, val loss 1.8857
+saving checkpoint to out-shakespeare-char
+iter 2000: loss 1.6958, time 267.90ms, mfu 0.08%
+```
+
+- `step N:` の行は、`eval_interval` 回ごとの `estimate_loss()` の結果です（第 8 章）。
+- `iter N:` の行は、その更新で使った 1 バッチの損失と、1 回の更新にかかった時間です。
+- `mfu` は、A100 GPU の bfloat16 の理論性能に対する計算速度の割合を `estimate_mfu()` で見積もった値です。最初の 5 回は計測を安定させるため `-100%` と表示されます。CPU で学習しているので、値は 0.1% 未満です。
+
+`step` の行を抜き出すと、損失は次のように推移しました。
+
+| 更新回数 | 学習用の損失 | 検証用の損失 |      差 |
+| -------: | -----------: | -----------: | ------: |
+|        0 |       4.1676 |       4.1649 | −0.0027 |
+|      250 |       2.4293 |       2.4447 |  0.0154 |
+|      500 |       2.2732 |       2.3141 |  0.0409 |
+|      750 |       2.1338 |       2.1905 |  0.0567 |
+|    1,000 |       1.9714 |       2.0528 |  0.0814 |
+|    1,250 |       1.8756 |       2.0089 |  0.1333 |
+|    1,500 |       1.8557 |       1.9225 |  0.0668 |
+|    1,750 |       1.7790 |       1.8921 |  0.1131 |
+|    2,000 |       1.7648 |       1.8857 |  0.1209 |
+
+最終的な検証損失 `1.8857` は、README に書かれた「1.88」と一致します。
+
+## 損失と生成される文章の変化
+
+次の図は、上の学習の損失の推移です。薄い線は各更新のバッチの損失の移動平均、点を結んだ線は `estimate_loss()` の値です。下のボタンで学習の段階を選ぶと、その時点の重みで生成した文章を表示します。
+
+文章は `sample.py` と同じ設定（seed `1337`、改行から始めて `temperature = 0.8`、`top_k = 200`）で 300 文字生成しました。どの段階でも同じ乱数列を使っているので、文章の違いはモデルの重みの違いだけによるものです。
+
+<TrainingRun lang="ja" />
+
+段階を順に見ると、モデルが何から学んでいくかがわかります。
+
+1. **更新 0 回**：学習前のモデルは、`$`、`&`、`3` などの記号も含めて、65 種類の文字をほぼ均等に出力します。
+2. **更新 50 回・100 回**：生成した文字のうち記号・句読点・数字は 59 → 27 → 14 文字、大文字は 123 → 50 → 11 文字と減り、空白は 4 → 28 → 46 文字と増えます。100 回では `The`、`ore` のような短い文字列が現れます。
+3. **更新 250 回**：損失は 2.43 まで下がり、`I by`、`the,` のような短い単語や、行の区切りが現れます。
+4. **更新 500 回**：`WONIO:`、`ELORCEOP:` のように、大文字の名前とコロンで始まる台詞の形式が現れます。
+5. **更新 1,000 回・2,000 回**：`what`、`thee`、`I'll`、`your`、`Sir, should and then thee.` のように、実在する単語や英語らしい語順が増えます。
+
+損失の推移と比べると、損失が急に下がる最初の 250 回で文字の頻度と単語の区切りを、その後のゆっくりした低下の中で単語のつづりと台詞の形式を学んでいることがわかります。
+
+## 学習用と検証用の損失の差
+
+学習用の損失は、モデルが重みの更新に使ったデータの損失です。検証用の損失は、学習に使っていない `val.bin` の損失で、未知の文章に対する予測性能の見積もりです。
+
+上の表では、両者の差が学習の進行とともに広がり、更新 2,000 回で `0.12` になりました。この差が大きくなり続け、検証用の損失が下がらなくなる状態を**過学習（overfitting）**と呼びます。この学習では検証用の損失も最後まで下がり続けているので、過学習が問題になるのはこれより先の段階です。`estimate_loss()` は毎回ランダムな 20 バッチで見積もるため、1,250 回目のように差が前後することもあります。
+
+参照元の設定ファイルのコメントには「we expect to overfit on this small dataset」とあり、より大きなモデルを長く学習すると検証用の損失が上昇に転じます。モデルの大きさや学習の長さを変えた場合の結果は、次章の実験で確かめます。
+
+## `sample.py` で文章を生成する
+
+学習が終わると、`out-shakespeare-char/ckpt.pt` に checkpoint が保存されています。README のとおり、`sample.py` で文章を生成できます。
+
+```bash
+python sample.py --out_dir=out-shakespeare-char --device=cpu --num_samples=1 --max_new_tokens=300
+```
+
+[`sample.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/sample.py#L56-L89) は checkpoint の設定から dataset を特定し、`meta.pkl` の `stoi` と `itos` で文字列と token ID を変換します。生成の中心は、第 7 章で読んだ `model.generate()` です。
+
+```python
+start_ids = encode(start)
+x = (torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...])
+
+with torch.no_grad():
+    with ctx:
+        for k in range(num_samples):
+            y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
+            print(decode(y[0].tolist()))
+            print('---------------')
+```
+
+このコマンドの出力は、上の図の更新 2,000 回の文章と一致しました。
+
+```text
+I by done what leave death,
+And aproposely beef the are and sors blate though wat our fort
+Thine the aftior than whating bods farse dowed
+And nears and thou stand murs's consel.
+
+MEOF:
+Sir, should and then thee.
+
+GRICHARD one, enceling:
+Or house
+Your to do the all in despery I parve porge,
+And shall
+```
+
+## 記事の値を再現する
+
+この章と第 5〜10 章の図の値は、上の `train.py` の学習を、記録用の処理を加えて再実行して得ました。再実行のスクリプトは、固定コミットの `model.py` をそのまま使い、`train.py` と同じ順序で乱数を使ってバッチを作り、評価、学習率、AdamW、勾配のクリップを適用します。そのうえで、乱数を消費しない範囲で、各更新の学習率と勾配のノルム、途中段階の重みを記録しています。
+
+生成環境では、次の 3 点を確認しました。
+
+- 2,001 回の更新すべてで、各バッチの損失が `train.py` のログと小数点以下 4 桁まで一致した。
+- 更新 2,000 回の重みが、`train.py` が保存した `ckpt.pt` の重みと完全に一致した。
+- 更新 2,000 回の重みから生成した文章が、`sample.py` の出力と一致した。
+
+同じコマンドでも、PyTorch のバージョン、CPU の種類、`--device=mps` や GPU の使用によって、損失の値や生成される文章は変わることがあります。その場合も、損失がおおむね 4.17 から 1.9 前後へ下がり、台詞の形式と英語らしい単語が現れる傾向は同じになると考えられます。
+
+## 次の章へ
+
+README の CPU 向けの設定で、80 万パラメータの文字単位 GPT を 2,000 回更新し、検証損失は 4.16 から 1.89 まで下がりました。生成される文章は、ランダムな文字列から、単語の区切り、台詞の形式、実在する単語へと段階的に変わりました。
+
+このモデルは、参照元の `train_shakespeare_char.py` の既定（1,000 万パラメータ、`block_size = 256`、5,000 回）よりずっと小さな設定です。次章では、モデルの大きさ、学習の長さ、文脈の長さを変えて、損失がどう変わるかを実験します。

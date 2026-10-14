@@ -1,0 +1,213 @@
+---
+title: 'Multi-Head Attention'
+description: 'Split vector components across several heads, compute attention weights per head, and combine the results. Inspect each head’s attention pattern and loss contribution in a small trained model.'
+order: 5
+series: nanogpt
+lang: en
+translationKey: nanogpt-05-multi-head-attention
+slug: 05-multi-head-attention
+draft: false
+upstream:
+  repository: karpathy/nanoGPT
+  commit: 3adf61e154c3fe3fca428ad6bc3818b27a3b8291
+  sourceFiles:
+    - model.py
+experimentId: nanogpt-05-multi-head-attention
+---
+
+import HeadSplit from '../../../../components/HeadSplit.astro';
+import AttentionHeads from '../../../../components/AttentionHeads.astro';
+
+## Attend to several sources at once
+
+The previous chapter fixed `n_head = 1` and followed one attention head. With one head, each position's output is a sum of values weighted by a single set of attention weights.
+
+Predicting a continuation needs several kinds of information at once. For a character-level model, useful clues include the previous character, the start of the current word, and the start of the line. A single set of weights can only cover them by spreading its weight across several positions.
+
+**Multi-head attention** runs several attention-weight computations side by side, each with its own queries, keys, and values. Each head chooses its sources independently, and the results are combined into one vector at the end.
+
+nanoGPT adds no new module for multi-head attention. The [`CausalSelfAttention.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L52-L76) method from the previous chapter already handles `n_head > 1`. This chapter rereads the same code with attention on the head axis.
+
+## Split the components by head
+
+The first part of `CausalSelfAttention.forward()` is shown below, with the source comments retained.
+
+```python
+B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+
+q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
+k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+```
+
+In the comments, `nh` is the number of heads `H`, and `hs` is the number of components per head, `d = C / H`. The `assert config.n_embd % config.n_head == 0` in `CausalSelfAttention.__init__()` ensures that `C` is divisible by `H`.
+
+`view(B, T, H, d)` cuts each position's `C`-component vector into `H` pieces of **`d` consecutive components**. Head `h` uses components `h·d` through `(h+1)·d − 1`. The following `transpose(1, 2)` moves the head axis in front of the position axis, giving shape `[B, H, T, d]`.
+
+`c_attn` is a single `nn.Linear`, and cutting its output components corresponds to cutting its weight rows. In the `[C, C]` query part of the weight, rows `h·d` through `(h+1)·d − 1` form the `[d, C]` transformation that produces head `h`'s queries. Keys and values work the same way, so **each head has its own Q, K, and V linear transformations**.
+
+The diagram below colors a query vector with `C = 128`, as in the model trained in chapter 11, by head. Changing `H` changes the number of components each head handles and the shapes of the intermediate arrays.
+
+<HeadSplit lang="en" />
+
+Increasing `H` reduces the components per head, `d`, but the weights of `c_attn` and `c_proj` keep shapes `[3C, C]` and `[C, C]` regardless of `H`. The number of heads decides how the same weight elements are divided among independent attention computations.
+
+## Compute attention weights for each head
+
+The following computation uses exactly the same code as the previous chapter:
+
+```python
+att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+att = F.softmax(att, dim=-1)
+att = self.attn_dropout(att)
+y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+```
+
+PyTorch's `@` multiplies over the last two axes and treats the preceding axes `[B, H]` as batch axes. It therefore performs **independent attention computations for every sample and every head** together.
+
+```text
+q                         [B, H, T, d]
+k.transpose(-2, -1)       [B, H, d, T]
+att                       [B, H, T, T]
+v                         [B, H, T, d]
+y = att @ v               [B, H, T, d]
+```
+
+For head `h` of sample `b`, write the two-dimensional arrays $Q^{(h)}$, $K^{(h)}$, and $V^{(h)}$ (each $T \times d$). The computation is:
+
+$$
+A^{(h)} = \operatorname{softmax}\!\left(\frac{Q^{(h)}{K^{(h)}}^\top}{\sqrt{d}} + M\right),
+\qquad
+Y^{(h)} = A^{(h)} V^{(h)}
+$$
+
+The scaling factor uses `k.size(-1)`, the number of components per head, `d`. In the previous chapter `d = C`; with `H = 4` and `C = 128`, `d = 32`, so the scores are multiplied by `1/√32`. The causal mask $M$ is shared by all heads: `self.bias` has shape `[1, 1, T, T]` and broadcasts across the batch and head axes.
+
+There is one set of attention weights `att[b, h]` per head, and each head gathers only its own `d` value components. When computing one position's output, head 0 can gather from the previous character while head 3 gathers from the start of the line, for example.
+
+## Place head outputs side by side and mix them with `c_proj`
+
+The `[B, H, T, d]` results gathered by the heads return to the original shape in two lines:
+
+```python
+y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+y = self.resid_dropout(self.c_proj(y))
+```
+
+`transpose(1, 2)` returns to `[B, T, H, d]`, and `view(B, T, C)` joins the last two axes. The vector at position `t` lists the outputs of head 0 through head `H − 1` in order:
+
+$$
+\boldsymbol{y}_t = \left[\,\boldsymbol{y}^{(0)}_t;\ \boldsymbol{y}^{(1)}_t;\ \dots;\ \boldsymbol{y}^{(H-1)}_t\,\right]
+$$
+
+At this point each head's result occupies its own components. The following `c_proj` (an `nn.Linear(C, C)`) mixes them into a `C`-component output. Split the columns of its weight $W_O$ (shape `[C, C]`) into blocks of `d` columns per head, written $W_O^{(h)}$. Ignoring the bias:
+
+$$
+W_O \boldsymbol{y}_t = \sum_{h=0}^{H-1} W_O^{(h)} \boldsymbol{y}^{(h)}_t
+$$
+
+**Each head writes into the residual stream through its own column block, and the attention output is the sum of these writes.** The previous chapter noted that, with one head, `c_proj` can be absorbed into the value transformation. With several heads, `c_proj` learns how to combine separately gathered information in the `C`-component space.
+
+The amount of computation is also worth checking. The score computation `q @ kᵀ` takes `T × T × d` multiply-adds per head, or `T × T × C` across all `H` heads. Changing the number of heads leaves both the weight elements and the score multiply-adds unchanged. It changes the number of attention-weight sets and the number of components in each.
+
+## Observe heads in a trained model
+
+From here on, we use **the model actually trained in chapter 11**. It follows the CPU settings given in the source repository's README: a character-level model with `n_layer = 4`, `n_head = 4`, `n_embd = 128` (`d = 32`), and `block_size = 64`. It was trained on Tiny Shakespeare for 2,000 updates, and `train.py` reported a validation loss of `1.8857`. Chapter 11 covers the training procedure and results.
+
+The input is 64 characters from position 3 of the validation data `val.bin`:
+
+```text
+GREMIO:
+Good morrow, neighbour Baptista.
+
+BAPTISTA:
+Good morrow,
+```
+
+Choose a layer and a head, then select a character. The background shade of each character shows the weight assigned to it when computing the selected position's output (one row, `att[0, h, t, :]`). The array below shows the same head's full `64 × 64` attention weights. Entries above the diagonal are `0` because of the causal mask.
+
+<AttentionHeads lang="en" />
+
+### Observations
+
+The values in this diagram are actual computations from the trained model, but the observations rest on this model and this input.
+
+1. **Layer 0 heads look nearby.** All four have a mean attention distance of about 3 characters, and their average weight on the previous position ranges from 0.21 to 0.30.
+2. **Layer 1, head 3 looks at the start of the line.** Its mean attention distance is 13.8 characters, much larger than the other heads. At most positions inside the second `Good morrow,`, its largest weight falls on the preceding newline (position 51). At position 55 (`d`), for example, the weight is `0.807`.
+3. **Layer 1, heads 0 and 1 look at the start of the word.** Selecting the first four letters of `morrow` (`m`, `o`, `r`, `r`; positions 57–60) shows both heads assigning weights of `0.69`–`0.996` to the preceding space (position 56).
+4. **The repeated phrase is not used.** The second `Good morrow,` (positions 52–63) repeats the first (positions 8–19), but across all 16 heads the largest weight assigned to the first phrase is `0.074`. In the cases examined, the heads attend to nearby positions and to separators such as spaces and newlines.
+
+### How does the loss change when a head is zeroed?
+
+One way to measure a head's importance is to replace its output `y[:, h]` with `0` before `c_proj` and observe the change in loss. This is an intervention for inspection; nanoGPT inference never does this.
+
+On 200 validation inputs of 64 characters chosen with a fixed seed, the baseline loss was `1.9107`. It differs from `train.py`'s `1.8857` because the evaluation inputs are chosen differently and their number differs. The largest increase came from layer 0, head 3 (`+0.240`), and the smallest from layer 3, head 3 (`+0.005`). Layer 1, head 3, which looks at line starts, gave `+0.007`. Use “Show statistics for all heads” in the diagram to see the full list.
+
+The loss increase shows how much the rest of the model depends on a head's output. Understanding what a head represents takes other observations as well, such as its attention pattern. Layer 1, head 3, which looks at line starts, has a clear pattern yet a small loss increase.
+
+## Verify in code
+
+Running the training command in chapter 11 saves the trained model to `out-shakespeare-char/ckpt.pt`. The following code uses that checkpoint and `model.py` at the pinned source commit to compute layer 1's multi-head attention by hand. Run it from the nanoGPT directory.
+
+```python
+import math
+import pickle
+import torch
+from torch.nn import functional as F
+from model import GPT, GPTConfig
+
+ckpt = torch.load('out-shakespeare-char/ckpt.pt', map_location='cpu')
+model = GPT(GPTConfig(**ckpt['model_args']))
+model.load_state_dict(ckpt['model'])
+model.eval()
+
+with open('data/shakespeare_char/meta.pkl', 'rb') as f:
+    stoi = pickle.load(f)['stoi']
+text = "GREMIO:\nGood morrow, neighbour Baptista.\n\nBAPTISTA:\nGood morrow,"
+idx = torch.tensor([[stoi[c] for c in text]])
+
+block = model.transformer.h[1]
+B, T = idx.shape
+C, H = model.config.n_embd, model.config.n_head
+d = C // H
+
+with torch.no_grad():
+    x = model.transformer.wte(idx) + model.transformer.wpe(torch.arange(T))
+    x = model.transformer.h[0](x)
+    x = block.ln_1(x)
+
+    q, k, v = block.attn.c_attn(x).split(C, dim=2)
+    q, k, v = [a.view(B, T, H, d).transpose(1, 2) for a in (q, k, v)]
+    mask = torch.ones(T, T, dtype=torch.bool).tril()
+    att = (q @ k.transpose(-2, -1)) / math.sqrt(d)
+    att = F.softmax(att.masked_fill(~mask, float('-inf')), dim=-1)
+    y = att @ v
+    out = block.attn.c_proj(y.transpose(1, 2).contiguous().view(B, T, C))
+
+    W = block.attn.c_proj.weight
+    by_head = sum(y[:, h] @ W[:, h * d:(h + 1) * d].T for h in range(H))
+
+print(list(q.shape), list(att.shape), list(y.shape), list(out.shape))
+print(torch.allclose(out, block.attn(x), atol=1e-6))
+print(torch.allclose(out, by_head, atol=1e-6))
+print(att[0, :, 61].argmax(dim=-1).tolist())
+```
+
+This model uses `bias=False`, so `c_proj` has no bias. After the parameter count, the generation environment printed:
+
+```text
+[1, 4, 64, 32] [1, 4, 64, 64] [1, 4, 64, 32] [1, 64, 128]
+True
+True
+[61, 61, 58, 51]
+```
+
+The first line gives the shapes of the queries, attention weights, per-head aggregates, and attention output. The second line shows agreement between the manual computation and the source module. The third shows that the sum of the per-head column-block contributions equals the `c_proj` output. The last line lists the position each head weights most at position 61; head 3 attends to the newline at position 51.
+
+## Next chapter
+
+Multi-head attention divides `C` components among `H` heads, and each head gathers values with its own attention weights. Placing the results side by side and passing them through `c_proj` lets each head write to the output through its column block. In the trained model, different heads attended to the previous character, the start of the word, and the start of the line.
+
+`Block.forward()` adds the attention output to the original `x`. The next chapter covers the residual stream formed by these additions, the MLP that transforms each position separately, and the LayerNorm placed before both.

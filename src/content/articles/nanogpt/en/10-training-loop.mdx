@@ -1,0 +1,261 @@
+---
+title: 'The Training Loop'
+description: 'Read train.py’s training loop in order: AdamW updates, which weights receive weight decay, the learning-rate schedule, gradient clipping, gradient accumulation, and evaluation with checkpoints, and compare them with values recorded during an actual run.'
+order: 10
+series: nanogpt
+lang: en
+translationKey: nanogpt-10-training-loop
+slug: 10-training-loop
+draft: false
+upstream:
+  repository: karpathy/nanoGPT
+  commit: 3adf61e154c3fe3fca428ad6bc3818b27a3b8291
+  sourceFiles:
+    - train.py
+    - model.py
+    - config/train_shakespeare_char.py
+experimentId: nanogpt-10-training-loop
+---
+
+import LrSchedule from '../../../../components/LrSchedule.astro';
+import GradNormHistory from '../../../../components/GradNormHistory.astro';
+
+## What one update does
+
+So far we have covered building batches (chapter 2), the forward pass and loss (chapters 3–8), and computing gradients (chapter 9). [The training loop in `train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L249-L333) combines them to update the weights repeatedly. With distributed training (DDP), logging, and comments removed, it looks like this:
+
+```python
+X, Y = get_batch('train')
+while True:
+    lr = get_lr(iter_num) if decay_lr else learning_rate
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+
+    if iter_num % eval_interval == 0 and master_process:
+        losses = estimate_loss()
+        # save a checkpoint when the validation loss improves (see below)
+
+    for micro_step in range(gradient_accumulation_steps):
+        with ctx:
+            logits, loss = model(X, Y)
+            loss = loss / gradient_accumulation_steps
+        X, Y = get_batch('train')
+        scaler.scale(loss).backward()
+    if grad_clip != 0.0:
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+    scaler.step(optimizer)
+    scaler.update()
+    optimizer.zero_grad(set_to_none=True)
+
+    iter_num += 1
+    if iter_num > max_iters:
+        break
+```
+
+One update (iteration) proceeds as follows:
+
+1. Compute this update's learning rate with `get_lr()` and set it in the optimizer.
+2. At regular intervals, estimate the loss and save a checkpoint if appropriate.
+3. Run forward and backward `gradient_accumulation_steps` times, accumulating gradients.
+4. Limit the gradient norm to `grad_clip`.
+5. Update the weights with AdamW and clear the gradients.
+
+`scaler` is the `GradScaler` used for float16 training; with chapter 11's CPU float32 settings it does nothing. The sections below start with how the optimizer is built.
+
+## The optimizer and which weights decay
+
+The optimizer is created before the loop by [`GPT.configure_optimizers()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L263-L287) (printing and comments omitted):
+
+```python
+param_dict = {pn: p for pn, p in self.named_parameters()}
+param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+optim_groups = [
+    {'params': decay_params, 'weight_decay': weight_decay},
+    {'params': nodecay_params, 'weight_decay': 0.0}
+]
+fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+use_fused = fused_available and device_type == 'cuda'
+extra_args = dict(fused=True) if use_fused else dict()
+optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+```
+
+Parameters are split into two groups: **arrays with two or more dimensions** (linear-transformation weights and embeddings) and **one-dimensional arrays** (biases and LayerNorm `weight`). Only the first group receives weight decay. The tied `wte` and `lm_head` appear once in `named_parameters()`.
+
+For chapter 11's model (`bias=False`), weight decay applies to 18 arrays with 802,944 elements and not to the 9 LayerNorm `weight` arrays with 1,152 elements.
+
+## The AdamW update
+
+`torch.optim.AdamW` keeps two moving averages of the gradient for each weight. With update count $k$ and gradient $g$:
+
+$$
+m_k = \beta_1 m_{k-1} + (1-\beta_1)\,g,\qquad
+v_k = \beta_2 v_{k-1} + (1-\beta_2)\,g^2
+$$
+
+$$
+\hat m_k = \frac{m_k}{1-\beta_1^k},\qquad
+\hat v_k = \frac{v_k}{1-\beta_2^k},\qquad
+\theta \leftarrow \theta\,(1-\eta\lambda) - \eta\,\frac{\hat m_k}{\sqrt{\hat v_k}+\varepsilon}
+$$
+
+$m$ estimates the mean gradient and $v$ the mean squared gradient; $\hat m$ and $\hat v$ correct the bias from their zero initialization. $\eta$ is the learning rate, $\lambda$ is `weight_decay`, and $\varepsilon = 10^{-8}$. In [`config/train_shakespeare_char.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/config/train_shakespeare_char.py#L27-L31), $\beta_1 = 0.9$, $\beta_2 = 0.99$, and $\lambda = 0.1$ (the `train.py` default).
+
+The step is determined by $\hat m/\sqrt{\hat v}$, not proportional to the gradient's size. On the first update, $\hat m = g$ and $\hat v = g^2$, so the step is almost exactly $-\eta\,\operatorname{sign}(g)$: **every weight moves by about the learning rate**. As the previous chapter showed, gradient sizes differ by more than a factor of 100 between parameters. AdamW evens out step sizes by dividing each weight's gradient by its typical size.
+
+The $\theta(1-\eta\lambda)$ term is **weight decay**. Independently of the gradient, it pulls weights slightly toward 0 at every update. AdamW applies this shrinkage separately from the gradient normalization.
+
+## The learning-rate schedule
+
+The learning rate changes over training; [`get_lr()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L230-L242) computes it for each update:
+
+```python
+def get_lr(it):
+    # 1) linear warmup for warmup_iters steps
+    if it < warmup_iters:
+        return learning_rate * (it + 1) / (warmup_iters + 1)
+    # 2) if it > lr_decay_iters, return min learning rate
+    if it > lr_decay_iters:
+        return min_lr
+    # 3) in between, use cosine decay down to min learning rate
+    decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
+    assert 0 <= decay_ratio <= 1
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
+    return min_lr + coeff * (learning_rate - min_lr)
+```
+
+1. **Warmup**: for the first `warmup_iters` updates, raise the learning rate linearly from near 0 to `learning_rate`.
+2. **Cosine decay**: until `lr_decay_iters`, lower it to `min_lr` along half a cosine period.
+3. Afterwards, keep it at `min_lr`.
+
+Early in training, the weights and AdamW's moving averages are close to their initial values, and large updates tend to destabilize training. Warmup limits the step size during this period. Lowering the learning rate near the end reduces the variation in updates caused by which mini-batches are drawn.
+
+In the diagram below, moving the sliders recomputes `get_lr()` in the browser and redraws the curve. The dashed line is the learning rate actually recorded in chapter 11's run (`learning_rate = 1e-3`, `warmup_iters = 100`, `lr_decay_iters = 2000`, `min_lr = 1e-4`), which coincides with the solid line at the initial settings.
+
+<LrSchedule lang="en" />
+
+Setting `lr_decay_iters` larger than `max_iters` (2000) ends training before the learning rate has fully decayed. As the comment in the source configuration file says, `lr_decay_iters` is usually set equal to `max_iters`.
+
+## Gradient clipping
+
+Before AdamW, the loop [clips the gradients](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L306-L309):
+
+```python
+if grad_clip != 0.0:
+    scaler.unscale_(optimizer)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+```
+
+`clip_grad_norm_()` computes the norm $\lVert g\rVert$ of all parameter gradients treated as one vector. If $\lVert g\rVert$ exceeds `grad_clip` ($c$), every gradient is multiplied by $c/\lVert g\rVert$. The operation keeps the gradient's direction and limits its size to $c$.
+
+The diagram below shows the pre-clipping norm recorded at each update of chapter 11's run. The thin line shows individual updates and the thick line their moving average.
+
+<GradNormHistory lang="en" />
+
+In 1,853 of the 2,001 updates, the norm exceeded `grad_clip = 1.0`. The largest value, `4.09`, came at the first update. The median fell to `1.08` for updates 100–499, then grew again, reaching `1.99` from update 1,500 on. From update 1,000 on, clipping was active at every update.
+
+With batches of only 12 × 64 = 768 characters, the gradients vary widely in this setting and clipping is almost always active.
+
+## Gradient accumulation
+
+`gradient_accumulation_steps` is the number of small batches (micro-batches) used per update. Repeating forward and backward makes PyTorch **add** gradients into `.grad`. Dividing each loss by `gradient_accumulation_steps` makes the accumulated gradient equal to the gradient of the mean loss over one large batch made of all micro-batches.
+
+The number of tokens used per update is computed in [`train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L101):
+
+```python
+tokens_per_iter = gradient_accumulation_steps * ddp_world_size * batch_size * block_size
+```
+
+Chapter 11's settings use 1 × 1 × 12 × 64 = 768 tokens; the default GPT-2 reproduction settings use 40 × 1 × 12 × 1,024 = 491,520 tokens. (With 8-GPU DDP, each GPU's accumulation count is divided by 8 and the total stays the same.)
+
+Inside the micro-batch loop, the next batch is fetched with `get_batch('train')` right after the forward pass. As the source comment says, this prepares and starts transferring the next batch on the CPU while the GPU is still computing the forward pass.
+
+## Evaluation and checkpoints
+
+Every `eval_interval` updates, chapter 8's `estimate_loss()` estimates the training and validation losses. The checkpoint is saved under this condition:
+
+```python
+if losses['val'] < best_val_loss or always_save_checkpoint:
+    best_val_loss = losses['val']
+    if iter_num > 0:
+        checkpoint = {
+            'model': raw_model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'model_args': model_args,
+            'iter_num': iter_num,
+            'best_val_loss': best_val_loss,
+            'config': config,
+        }
+        torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+```
+
+The Shakespeare settings use `always_save_checkpoint = False`, so a checkpoint is saved only when the validation loss improves. Besides the weights, the checkpoint holds the optimizer state, including AdamW's $m$ and $v$, the update count, and the configuration. This is what allows `init_from='resume'` to continue training.
+
+In chapter 11's run, the validation loss dropped at every evaluation (every 250 updates), so a checkpoint was saved each time up to update 2,000. Evaluation happens before the weight update, so the last saved checkpoint holds the weights after 2,000 updates.
+
+## Verify in code
+
+Using an untrained model with chapter 11's configuration, check the parameter groups, gradient accumulation, and AdamW's first update. The data are random token IDs.
+
+```python
+import copy
+import math
+import torch
+from model import GPT, GPTConfig
+
+torch.manual_seed(1337)
+model = GPT(GPTConfig(n_layer=4, n_head=4, n_embd=128, block_size=64,
+                      bias=False, vocab_size=65, dropout=0.0))
+optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=1e-3,
+                                       betas=(0.9, 0.99), device_type='cpu')
+
+torch.manual_seed(0)
+X = torch.randint(65, (12, 64))
+Y = torch.randint(65, (12, 64))
+
+# Gradient accumulation: 4 micro-batches of 3 with loss / 4
+full = copy.deepcopy(model)
+full(X, Y)[1].backward()
+accum = copy.deepcopy(model)
+for k in range(4):
+    (accum(X[3 * k:3 * k + 3], Y[3 * k:3 * k + 3])[1] / 4).backward()
+diff = max((a.grad - b.grad).abs().max().item()
+           for a, b in zip(full.parameters(), accum.parameters()))
+print(diff < 1e-6)
+
+# One AdamW step at iteration 0
+model(X, Y)[1].backward()
+total = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+w = model.transformer.h[0].attn.c_attn.weight
+w0, g = w[0, 0].item(), w.grad[0, 0].item()
+lr = 1e-3 * 1 / 101  # get_lr(0) with warmup_iters = 100
+for group in optimizer.param_groups:
+    group['lr'] = lr
+optimizer.step()
+m_hat, v_hat = g, g * g  # bias-corrected moments after the first step
+expected = w0 * (1 - lr * 0.1) - lr * m_hat / (math.sqrt(v_hat) + 1e-8)
+print(round(total.item(), 3), abs(w[0, 0].item() - expected) < 1e-9)
+print(round((w[0, 0].item() - w0) / lr, 4), math.copysign(1, g))
+```
+
+The generation environment printed:
+
+```text
+number of parameters: 0.80M
+num decayed parameter tensors: 18, with 802,944 parameters
+num non-decayed parameter tensors: 9, with 1,152 parameters
+using fused AdamW: False
+True
+1.333 True
+-0.9994 1.0
+```
+
+Lines 2–4 come from `configure_optimizers()` and show the two weight-decay groups. The following `True` shows that the gradient accumulated over four micro-batches equals the gradient of the batch of 12. The next line gives the pre-clipping gradient norm and confirms that the AdamW update matches the formula above. The last line shows that the update divided by the learning rate is almost exactly `-1`, the opposite of the gradient's sign.
+
+## Next chapter
+
+The training loop repeatedly sets the learning rate, accumulates gradients, clips them, and updates the weights with AdamW. AdamW evens out step sizes by dividing by each weight's gradient size, and weight decay gradually shrinks only the weights with two or more dimensions. The learning rate rises during warmup and then follows a cosine decay, and checkpoints are saved when evaluation shows an improved validation loss.
+
+The next chapter runs this training loop and observes the loss curve and the text generated at each stage of training.

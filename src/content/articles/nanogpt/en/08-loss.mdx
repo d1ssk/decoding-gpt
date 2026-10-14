@@ -1,0 +1,192 @@
+---
+title: 'Loss'
+description: 'Compute cross entropy from each position’s predicted probabilities and target token, and summarize a batch in one number. Compare which characters are hard to predict before and after training.'
+order: 8
+series: nanogpt
+lang: en
+translationKey: nanogpt-08-loss
+slug: 08-loss
+draft: false
+upstream:
+  repository: karpathy/nanoGPT
+  commit: 3adf61e154c3fe3fca428ad6bc3818b27a3b8291
+  sourceFiles:
+    - model.py
+    - train.py
+experimentId: nanogpt-08-loss
+---
+
+import CrossEntropyToy from '../../../../components/CrossEntropyToy.astro';
+import TokenLoss from '../../../../components/TokenLoss.astro';
+
+## Summarize predictions and targets in one number
+
+The model can now compute next-token logits for every position in a batch. Training expresses how well these predictions match the targets `Y` as **a single number** and updates the weights to make it smaller. This number is the **loss**.
+
+When given `targets`, [`GPT.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L184-L187) returns the loss along with the logits.
+
+```python
+if targets is not None:
+    # if we are given some desired targets also calculate the loss
+    logits = self.lm_head(x)
+    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+```
+
+In chapter 2's training loop, `get_batch()` returned `X, Y`, which were passed to `model(X, Y)`. That `Y` is `targets` here.
+
+`F.cross_entropy()` expects a two-dimensional array with one prediction per row, so `view()` merges the batch and position axes:
+
+```text
+logits                 [B, T, V]
+logits.view(-1, V)     [B·T, V]
+targets                [B, T]
+targets.view(-1)       [B·T]
+loss                   []        scalar
+```
+
+It computes a loss for each of the `B·T` predictions and returns their mean as a single scalar.
+
+## Cross entropy
+
+Let $\boldsymbol{z}$ be the logits at position `t` and $y$ the target token. Writing $p_y$ for the target's softmax probability, the **cross entropy** at that position is:
+
+$$
+\ell = -\log p_y = -z_y + \log\sum_{u=0}^{V-1}\exp(z_u)
+$$
+
+`F.cross_entropy()` computes this directly from the logits, which is more numerically stable than computing softmax and log separately. Its `reduction` defaults to `'mean'`, so the batch loss is the average over all $N = B \cdot T$ predictions:
+
+$$
+\mathcal{L} = \frac{1}{N}\sum_{n=1}^{N} -\log p^{(n)}_{y_n}
+$$
+
+This loss has the following properties:
+
+- If the target probability is 1, the loss is 0; as it approaches 0, the loss grows without bound.
+- Only the target probability enters the loss. Other tokens' probabilities affect it indirectly through the softmax denominator.
+- Assigning every token the same probability $1/V$ gives a loss of $\ln V$. With 65 tokens, $\ln 65 \approx 4.174$.
+
+The diagram below is an illustrative example with five tokens. Change the logits to see how the softmax probabilities and the loss respond. Raising the target's logit lowers the loss; raising another token's logit lowers the target probability and raises the loss.
+
+<CrossEntropyToy lang="en" />
+
+### The loss as an average log probability
+
+The probability of a whole text is the product of each position's conditional probability:
+
+$$
+p(x_1, \dots, x_T) = \prod_{t} p(x_{t+1} \mid x_1, \dots, x_t)
+$$
+
+Taking the log turns the product into a sum, so reducing the average loss is the same as increasing the probability of the entire training text.
+
+The loss is measured in nats (natural logarithm). Dividing by $\ln 2$ converts it to bits, and $e^{\mathcal{L}}$ is called the **perplexity**. Perplexity expresses the difficulty as “equivalent to guessing among this many candidates on average.” It is 65 for a uniform prediction and about 6.6 for the validation loss of `1.8857` reached by the model trained in chapter 11.
+
+### `ignore_index=-1`
+
+`ignore_index=-1` excludes positions whose target is `-1` from the loss and from the averaging denominator. The `Y` produced by nanoGPT's `get_batch()` never contains `-1`, so Shakespeare training never uses it. It is useful, for example, when training only on the response part of conversation data. Chapter 13 covers how nanochat uses it.
+
+## The loss before training is close to $\ln V$
+
+nanoGPT initializes weights from a normal distribution with standard deviation 0.02. Before training, all logits are close to 0 and softmax gives an almost uniform distribution, so the initial loss is close to $\ln V$.
+
+In chapter 11's training run, the validation loss reported by `train.py` before any update was `4.1649`, almost exactly $\ln 65 = 4.1744$. If the loss right after training starts is far from $\ln V$, there may be a problem with initialization or data handling.
+
+## See per-character losses in the trained model
+
+The diagram below shows the loss assigned to each of 64 validation characters at three stages of chapter 11's training run. A darker background means the character was harder to predict from the preceding characters. The first `G` is never predicted and is left uncolored.
+
+<TokenLoss lang="en" />
+
+Switching stages shows:
+
+1. **After 0 updates**, every character's loss lies between `3.06` and `4.69`, with small differences between characters. The mean loss over these 64 characters is `4.113`.
+2. **After 250 updates**, spaces and newlines become easy first. Positions whose target is a space or newline average `0.45`, other positions `3.18`. The overall mean is `2.797`.
+3. **After 2,000 updates**, the mean loss falls to `2.061`. Characters determined by what precedes them get small losses, such as the newline after `GREMIO:` (`0.00`) and the `d` after `Goo` (`0.12`).
+
+Even after 2,000 updates, the largest losses were the `B` of `Baptista` (`6.81`), the `.` after `Baptista` (`6.70`), and the `b` of `neighbour` (`6.51`). The start of a new word and characters the context leaves open remain hard to predict after training.
+
+The mean over these 64 characters differs from the loss on the whole validation set. The diagram's “Mean loss over 200 validation windows” averages 200 windows of 64 characters drawn from the validation data with a fixed seed; after 2,000 updates it was `1.911`.
+
+## Estimating the loss during training
+
+During training, `train.py` estimates the loss on both the training and validation splits with [`estimate_loss()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L214-L228):
+
+```python
+@torch.no_grad()
+def estimate_loss():
+    out = {}
+    model.eval()
+    for split in ['train', 'val']:
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            X, Y = get_batch(split)
+            with ctx:
+                logits, loss = model(X, Y)
+            losses[k] = loss.item()
+        out[split] = losses.mean()
+    model.train()
+    return out
+```
+
+`model.eval()` disables dropout, and the losses of `eval_iters` random batches are averaged. The loss printed at each training step comes from a single batch and fluctuates widely, so training progress is judged from this estimate. Chapter 11 discusses how to read the gap between training and validation losses.
+
+## Verify in code
+
+Using the checkpoint from chapter 11, check that the loss from `forward()` is the mean of $-\log p_y$ over positions, the effect of `ignore_index`, and the loss before training. From 65 validation characters, build 64 input characters and the 64 targets shifted by one.
+
+```python
+import math
+import pickle
+import torch
+from torch.nn import functional as F
+from model import GPT, GPTConfig
+
+ckpt = torch.load('out-shakespeare-char/ckpt.pt', map_location='cpu')
+model = GPT(GPTConfig(**ckpt['model_args']))
+model.load_state_dict(ckpt['model'])
+model.eval()
+torch.manual_seed(1337)
+untrained = GPT(GPTConfig(**ckpt['model_args'])).eval()
+
+with open('data/shakespeare_char/meta.pkl', 'rb') as f:
+    stoi = pickle.load(f)['stoi']
+text = "GREMIO:\nGood morrow, neighbour Baptista.\n\nBAPTISTA:\nGood morrow, "
+ids = [stoi[c] for c in text]
+idx = torch.tensor([ids[:-1]])
+targets = torch.tensor([ids[1:]])
+
+with torch.no_grad():
+    logits, loss = model(idx, targets)
+    logp = F.log_softmax(logits[0], dim=-1)
+    per_position = -logp[torch.arange(64), targets[0]]
+
+    masked = targets.clone()
+    masked[0, :8] = -1
+    _, masked_loss = model(idx, masked)
+    _, untrained_loss = untrained(idx, targets)
+
+print(round(loss.item(), 4), torch.allclose(loss, per_position.mean()))
+print(torch.allclose(masked_loss, per_position[8:].mean()))
+print(round(untrained_loss.item(), 4), round(math.log(65), 4))
+worst = per_position.topk(3)
+print([(text[i + 1], round(v, 2)) for i, v in
+       zip(worst.indices.tolist(), worst.values.tolist())])
+```
+
+`untrained` is an untrained model initialized with the same seed, `1337`, as `train.py`. After the two parameter counts, the generation environment printed:
+
+```text
+2.0614 True
+True
+4.1128 4.1744
+[('B', 6.81), ('.', 6.7), ('b', 6.51)]
+```
+
+The first line shows that the loss returned by `forward()` equals the mean of $-\log p_y$ over positions. The second shows that setting the first 8 targets to `-1` gives the mean over the remaining positions. The third line compares the untrained loss with $\ln 65$, and the last lists the three characters with the largest loss.
+
+## Next chapter
+
+Cross entropy is the negative log of the probability assigned to the target token at each position. nanoGPT uses the mean over all positions in the batch as its loss, which starts near $\ln V$ before training. In the trained model, characters determined by their predecessors had small losses, while the starts of new words stayed hard.
+
+Reducing this loss requires knowing which way, and how far, to move each weight. The next chapter covers backpropagation, which computes the gradient of every weight from the loss.

@@ -1,0 +1,178 @@
+---
+title: 'Train a Tiny GPT'
+description: 'Train a character-level GPT with the CPU settings given in the source repository’s README, then compare the loss curve with the text generated at each stage of training.'
+order: 11
+series: nanogpt
+lang: en
+translationKey: nanogpt-11-train-a-tiny-gpt
+slug: 11-train-a-tiny-gpt
+draft: false
+upstream:
+  repository: karpathy/nanoGPT
+  commit: 3adf61e154c3fe3fca428ad6bc3818b27a3b8291
+  sourceFiles:
+    - README.md
+    - train.py
+    - sample.py
+    - config/train_shakespeare_char.py
+    - data/shakespeare_char/prepare.py
+experimentId: nanogpt-11-train-a-tiny-gpt
+---
+
+import TrainingRun from '../../../../components/TrainingRun.astro';
+
+## Train with the README settings
+
+Chapters 1 through 10 read nanoGPT's data, model, loss, gradients, and training loop in turn. This chapter runs them to train a small character-level GPT.
+
+The source repository's [README](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/README.md#quick-start) gives a command for training the Tiny Shakespeare character model on a CPU, for machines without a GPU. From the nanoGPT directory, prepare the data and then train:
+
+```bash
+python data/shakespeare_char/prepare.py
+python train.py config/train_shakespeare_char.py --device=cpu --compile=False \
+  --eval_iters=20 --log_interval=1 --block_size=64 --batch_size=12 \
+  --n_layer=4 --n_head=4 --n_embd=128 --max_iters=2000 --lr_decay_iters=2000 \
+  --dropout=0.0
+```
+
+`prepare.py` is the script read in chapter 1; it writes `train.bin`, `val.bin`, and `meta.pkl`. `train.py` first loads the settings in `config/train_shakespeare_char.py` and then overrides some of them with the `--key=value` arguments. The resulting settings are:
+
+| Setting                            | Value            | Source                        |
+| ---------------------------------- | ---------------- | ----------------------------- |
+| `n_layer` / `n_head` / `n_embd`    | 4 / 4 / 128      | Command line                  |
+| `block_size` / `batch_size`        | 64 / 12          | Command line                  |
+| `dropout`                          | 0.0              | Command line                  |
+| `bias`                             | `False`          | `train.py` default            |
+| `learning_rate` / `min_lr`         | 1e-3 / 1e-4      | Config file                   |
+| `max_iters` / `lr_decay_iters`     | 2000 / 2000      | Command line                  |
+| `warmup_iters`                     | 100              | Config file                   |
+| `beta1` / `beta2` / `weight_decay` | 0.9 / 0.99 / 0.1 | Default, config file, default |
+| `grad_clip`                        | 1.0              | `train.py` default            |
+| `eval_interval` / `eval_iters`     | 250 / 20         | Config file, command line     |
+| `device` / `compile`               | `cpu` / `False`  | Command line                  |
+
+The vocabulary size, 65, is read from `meta.pkl`. The model has 804,096 parameters; the count printed at startup (excluding position embeddings) is `0.80M`. Each update uses 12 × 64 = 768 tokens, so 2,001 updates process about 1.54 million tokens. The training data `train.bin` holds 1,003,854 tokens, so training covers it about 1.5 times.
+
+## Read the training log
+
+In the environment used for this article (an Apple M2 CPU with PyTorch 2.8.0), training finished in about 34 seconds. The README mentions about 3 minutes on a CPU; the time depends on the environment. `train.py` prints lines like these:
+
+```text
+tokens per iteration will be: 768
+found vocab_size = 65 (inside data/shakespeare_char/meta.pkl)
+Initializing a new model from scratch
+number of parameters: 0.80M
+num decayed parameter tensors: 18, with 802,944 parameters
+num non-decayed parameter tensors: 9, with 1,152 parameters
+using fused AdamW: False
+step 0: train loss 4.1676, val loss 4.1649
+iter 0: loss 4.1828, time 273.30ms, mfu -100.00%
+iter 1: loss 4.1373, time 21.82ms, mfu -100.00%
+...
+step 2000: train loss 1.7648, val loss 1.8857
+saving checkpoint to out-shakespeare-char
+iter 2000: loss 1.6958, time 267.90ms, mfu 0.08%
+```
+
+- `step N:` lines report `estimate_loss()` every `eval_interval` updates (chapter 8).
+- `iter N:` lines report the loss of that update's single batch and the time the update took.
+- `mfu` is `estimate_mfu()`'s estimate of compute speed as a fraction of an A100 GPU's theoretical bfloat16 throughput. It shows `-100%` for the first five updates while the measurement settles. Training on a CPU, the value stays below 0.1%.
+
+The `step` lines show the following progression:
+
+| Updates | Training loss | Validation loss |     Gap |
+| ------: | ------------: | --------------: | ------: |
+|       0 |        4.1676 |          4.1649 | −0.0027 |
+|     250 |        2.4293 |          2.4447 |  0.0154 |
+|     500 |        2.2732 |          2.3141 |  0.0409 |
+|     750 |        2.1338 |          2.1905 |  0.0567 |
+|   1,000 |        1.9714 |          2.0528 |  0.0814 |
+|   1,250 |        1.8756 |          2.0089 |  0.1333 |
+|   1,500 |        1.8557 |          1.9225 |  0.0668 |
+|   1,750 |        1.7790 |          1.8921 |  0.1131 |
+|   2,000 |        1.7648 |          1.8857 |  0.1209 |
+
+The final validation loss, `1.8857`, matches the “1.88” stated in the README.
+
+## How the loss and generated text change
+
+The diagram below shows the loss curve of this training run. The pale line is a moving average of each update's batch loss; the lines through points are `estimate_loss()` values. Choose a training stage with the buttons below to show text generated from the weights at that point.
+
+The text was generated with the same settings as `sample.py` (seed `1337`, starting from a newline, `temperature = 0.8`, `top_k = 200`) for 300 characters. Every stage uses the same random sequence, so differences in the text come only from differences in the model weights.
+
+<TrainingRun lang="en" />
+
+Going through the stages shows what the model learns first:
+
+1. **0 updates**: the untrained model outputs the 65 characters almost uniformly, including symbols such as `$`, `&`, and `3`.
+2. **50 and 100 updates**: among the generated characters, symbols, punctuation, and digits fall from 59 to 27 to 14, and uppercase letters from 123 to 50 to 11, while spaces rise from 4 to 28 to 46. At 100 updates, short strings such as `The` and `ore` appear.
+3. **250 updates**: the loss falls to 2.43, and short words such as `I by` and `the,` appear along with line breaks.
+4. **500 updates**: the dialogue format appears, with uppercase names followed by colons such as `WONIO:` and `ELORCEOP:`.
+5. **1,000 and 2,000 updates**: real words and English-like word order increase, such as `what`, `thee`, `I'll`, `your`, and `Sir, should and then thee.`
+
+Compared with the loss curve, the model learns character frequencies and word boundaries during the first 250 updates, when the loss drops quickly, and learns spellings and the dialogue format during the slower decline that follows.
+
+## The gap between training and validation loss
+
+The training loss is measured on the data the model uses to update its weights. The validation loss is measured on `val.bin`, which training never uses, and estimates predictive performance on unseen text.
+
+In the table above, the gap between them widens as training progresses, reaching `0.12` at 2,000 updates. When this gap keeps growing and the validation loss stops falling, the model is **overfitting**. Here the validation loss keeps falling to the end, so overfitting would become a problem only later in training. `estimate_loss()` uses 20 random batches each time, so the gap can fluctuate, as at update 1,250.
+
+A comment in the source configuration file says “we expect to overfit on this small dataset”: training a larger model for longer turns the validation loss upward. The next chapter's experiments check what happens when the model size and training length change.
+
+## Generate text with `sample.py`
+
+When training ends, the checkpoint is saved in `out-shakespeare-char/ckpt.pt`. As the README shows, `sample.py` generates text from it:
+
+```bash
+python sample.py --out_dir=out-shakespeare-char --device=cpu --num_samples=1 --max_new_tokens=300
+```
+
+[`sample.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/sample.py#L56-L89) identifies the dataset from the checkpoint's configuration and converts between strings and token IDs with `stoi` and `itos` from `meta.pkl`. The core of generation is `model.generate()`, read in chapter 7:
+
+```python
+start_ids = encode(start)
+x = (torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...])
+
+with torch.no_grad():
+    with ctx:
+        for k in range(num_samples):
+            y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
+            print(decode(y[0].tolist()))
+            print('---------------')
+```
+
+This command's output matched the text shown above for 2,000 updates:
+
+```text
+I by done what leave death,
+And aproposely beef the are and sors blate though wat our fort
+Thine the aftior than whating bods farse dowed
+And nears and thou stand murs's consel.
+
+MEOF:
+Sir, should and then thee.
+
+GRICHARD one, enceling:
+Or house
+Your to do the all in despery I parve porge,
+And shall
+```
+
+## Reproduce the values in these articles
+
+The values in the diagrams of this chapter and chapters 5–10 come from rerunning the `train.py` training above with added recording. The rerun script uses the pinned commit's `model.py` unchanged and builds batches with the same order of random draws as `train.py`, applying the same evaluation, learning-rate schedule, AdamW, and gradient clipping. It records each update's learning rate and gradient norm, and the weights at intermediate stages, without consuming random numbers.
+
+The generation environment confirmed three points:
+
+- At all 2,001 updates, each batch loss matched `train.py`'s log to four decimal places.
+- The weights after 2,000 updates exactly matched the weights in the `ckpt.pt` saved by `train.py`.
+- Text generated from the weights after 2,000 updates matched the output of `sample.py`.
+
+The same command can produce different loss values and generated text with a different PyTorch version, CPU type, `--device=mps`, or a GPU. Even then, the loss should still fall from about 4.17 to around 1.9, with the dialogue format and English-like words appearing.
+
+## Next chapter
+
+With the README's CPU settings, a character-level GPT with 800,000 parameters was updated 2,000 times, and its validation loss fell from 4.16 to 1.89. The generated text changed in stages from random characters to word boundaries, the dialogue format, and real words.
+
+This model is much smaller than the defaults in the source repository's `train_shakespeare_char.py` (10 million parameters, `block_size = 256`, 5,000 updates). The next chapter experiments with how the loss changes when the model size, training length, and context length vary.

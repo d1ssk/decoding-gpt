@@ -1,0 +1,244 @@
+---
+title: 'MLP and the Residual Stream'
+description: 'Read the two lines of a Transformer block and see what LayerNorm, the MLP, and residual connections each do. Observe the sizes of the vectors each sublayer writes into the residual stream of a trained model.'
+order: 6
+series: nanogpt
+lang: en
+translationKey: nanogpt-06-mlp-and-residual-stream
+slug: 06-mlp-and-residual-stream
+draft: false
+upstream:
+  repository: karpathy/nanoGPT
+  commit: 3adf61e154c3fe3fca428ad6bc3818b27a3b8291
+  sourceFiles:
+    - model.py
+experimentId: nanogpt-06-mlp-and-residual-stream
+---
+
+import LayerNormDemo from '../../../../components/LayerNormDemo.astro';
+import MlpActivations from '../../../../components/MlpActivations.astro';
+import ResidualStream from '../../../../components/ResidualStream.astro';
+
+## Two lines of a Transformer block
+
+The previous chapters showed how attention gathers information from other positions. A Transformer block has one more component besides attention: the **MLP**. The two lines of [`Block.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L94-L106) connect them.
+
+```python
+class Block(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
+        self.attn = CausalSelfAttention(config)
+        self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
+        self.mlp = MLP(config)
+
+    def forward(self, x):
+        x = x + self.attn(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
+        return x
+```
+
+Both lines have the same form:
+
+1. Normalize `x` with LayerNorm.
+2. Pass the normalized vectors to attention or the MLP.
+3. Add the output to `x` as it was before normalization.
+
+We call attention and the MLP **sublayers**. Each takes an array of shape `[B, T, C]` and returns one of the same shape. The sum also has shape `[B, T, C]`, so `x` keeps its shape no matter how many blocks are stacked.
+
+The `x` passed along by these additions is called the **residual stream**. Each sublayer reads the stream through LayerNorm and adds its result back into it. This chapter covers LayerNorm, the MLP, and the residual stream in that order.
+
+## LayerNorm: standardize the scale of each position's vector
+
+Instead of PyTorch's `nn.LayerNorm`, nanoGPT uses its own [`LayerNorm`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L18-L27), which allows omitting the bias.
+
+```python
+class LayerNorm(nn.Module):
+    """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
+
+    def __init__(self, ndim, bias):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(ndim))
+        self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
+
+    def forward(self, input):
+        return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
+```
+
+`F.layer_norm(input, (C,), ...)` normalizes over the `C` components of the last axis, that is, **separately for each sample and position**. For the vector $\boldsymbol{x}$ at position `t`, output component $c$ is:
+
+$$
+\mu = \frac{1}{C}\sum_{c=0}^{C-1} x_c,\qquad
+\sigma^2 = \frac{1}{C}\sum_{c=0}^{C-1} (x_c-\mu)^2,\qquad
+\operatorname{LN}(\boldsymbol{x})_c = \frac{x_c-\mu}{\sqrt{\sigma^2+\varepsilon}}\,\gamma_c + \beta_c
+$$
+
+$\varepsilon = 10^{-5}$ is a small value that prevents division by zero. $\gamma$ is `weight` (initialized to 1) and $\beta$ is `bias` (initialized to 0); both are learned. This chapter's model uses `bias=False`, so it has no $\beta$.
+
+After normalization, the components at every position have mean 0 and a standard deviation of almost exactly 1. As we will see, residual-stream vectors grow as layers accumulate. With LayerNorm in front, each sublayer receives inputs on a consistent scale regardless of the stream's size.
+
+The diagram below shows the vector at position 52 entering layer 0's `ln_1` in the model trained in chapter 11. The input's standard deviation is about `0.073`; after normalization it is 1. The sliders add the same value to every input component or multiply them all by the same value, and the normalized result barely changes.
+
+<LayerNormDemo lang="en" />
+
+LayerNorm keeps a vector's **directional information** (the relative sizes of its components) and removes its overall offset and size. The learned `weight` then rescales each component.
+
+nanoGPT also places one more LayerNorm (`ln_f`) after all blocks. The next chapter covers how the final stream is normalized before vocabulary scores are computed.
+
+## MLP: transform each position's vector separately
+
+The [`MLP`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L78-L92) applies two linear transformations with the GELU activation function between them.
+
+```python
+class MLP(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
+        self.gelu    = nn.GELU()
+        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
+        self.dropout = nn.Dropout(config.dropout)
+
+    def forward(self, x):
+        x = self.c_fc(x)
+        x = self.gelu(x)
+        x = self.c_proj(x)
+        x = self.dropout(x)
+        return x
+```
+
+The shapes change as follows. We call the intermediate `4C`-component values the **hidden layer**.
+
+```text
+x              [B, T, C]
+c_fc(x)        [B, T, 4C]
+gelu(...)      [B, T, 4C]
+c_proj(...)    [B, T, C]
+```
+
+`nn.Linear` applies the same transformation to every position's vector, and GELU acts on each component, so **the MLP never mixes information between positions**. Attention moves information between positions; the MLP transforms the information gathered at each position.
+
+### What one hidden component does
+
+Write row `i` of the `c_fc` weight as $\boldsymbol{w}^{\text{in}}_i$ and column `i` of the `c_proj` weight as $\boldsymbol{w}^{\text{out}}_i$. Ignoring biases, the MLP output is:
+
+$$
+\operatorname{MLP}(\boldsymbol{x}) = \sum_{i=0}^{4C-1} \operatorname{GELU}\!\left(\boldsymbol{w}^{\text{in}}_i\cdot\boldsymbol{x}\right)\,\boldsymbol{w}^{\text{out}}_i
+$$
+
+Hidden component `i` measures how far the input points along $\boldsymbol{w}^{\text{in}}_i$ by taking their dot product. The value after GELU multiplies the fixed vector $\boldsymbol{w}^{\text{out}}_i$, which is added into the output. The MLP output is a sum of `4C` fixed vectors with input-dependent coefficients.
+
+### GELU
+
+`nn.GELU()` is built from $\Phi$, the cumulative distribution function of the standard normal distribution:
+
+$$
+\operatorname{GELU}(u) = u\,\Phi(u) = \frac{u}{2}\left(1+\operatorname{erf}\frac{u}{\sqrt{2}}\right)
+$$
+
+For large positive $u$ it is almost $u$; for large negative $u$ it is almost 0. It changes smoothly around 0 and reaches its minimum of $-0.17$ near $u \approx -0.75$. Without this nonlinearity, the two linear transformations would collapse into one.
+
+The diagram below overlays the GELU curve on the distribution of the trained model's hidden values `u = c_fc(x)`, collected from 200 validation windows × 64 positions × 512 components.
+
+<MlpActivations lang="en" />
+
+In every layer, 21–36% of the components have `u > 0`. For the rest, the GELU output is almost 0 and the corresponding $\boldsymbol{w}^{\text{out}}_i$ contributes very little. At each position, only some of the `4C` vectors are used.
+
+The MLP weights contain $8C^2$ elements across `c_fc` and `c_proj` (excluding biases), twice attention's $4C^2$. They make up most of the model's weights.
+
+## Residual stream: build up information by addition
+
+Expanding the additions in `Block.forward()` across all blocks, the last block's output $\boldsymbol{x}_{\text{final}}$ is the following sum, where $\boldsymbol{a}_l$ and $\boldsymbol{m}_l$ are the outputs of layer $l$'s attention and MLP:
+
+$$
+\boldsymbol{x}_{\text{final}} = \boldsymbol{x}_{\text{emb}} + \sum_{l=0}^{L-1}\left(\boldsymbol{a}_l + \boldsymbol{m}_l\right)
+$$
+
+$\boldsymbol{x}_{\text{emb}}$ is the embedding sum built in chapter 3. Each sublayer leaves the stream's existing values in place and only adds its own output. Later layers read the sum of all earlier writes through LayerNorm.
+
+This form also helps training. The derivative of addition is the identity, so the gradient of the loss reaches earlier layers directly along the addition path, in parallel with the paths through each sublayer. Chapter 9 checks how gradients flow.
+
+### Scale the writes at initialization
+
+After initializing the weights, [`GPT.__init__()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L140-L145) reinitializes only the linear transformations that write into the stream with smaller values.
+
+```python
+# apply special scaled init to the residual projections, per GPT-2 paper
+for pn, p in self.named_parameters():
+    if pn.endswith('c_proj.weight'):
+        torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+```
+
+`c_proj` is the last linear transformation in both attention and the MLP, so it produces each write into the stream. There are $2L$ writes, so scaling the standard deviation by $1/\sqrt{2L}$ keeps their initial sum from growing too large with depth.
+
+### Look at the trained model's writes
+
+For the model from chapter 11, the diagram below shows, at a selected position, the norm of the vector each sublayer writes (bars) and the norm of the stream after adding it (line). The last table column gives the cosine similarity between each write and the final stream $\boldsymbol{x}_{\text{final}}$.
+
+<ResidualStream lang="en" />
+
+At position 52 (the `G` of the second `Good`), the embedding has norm `0.83`, layer 0's MLP writes a vector of norm `5.85`, and the stream's norm finally reaches `8.82`. Averaged over 200 validation windows × 64 positions, the stream's norm also grows from `0.81` for the embedding to `9.23` after the last block. Among sublayer writes, layer 0's MLP had the largest average norm, `5.47`.
+
+The stream's norm thus changes by more than a factor of ten, while LayerNorm gives every sublayer input a standard deviation of 1.
+
+## Verify in code
+
+Using the checkpoint trained in chapter 11, check that the stream is the sum of its writes and that LayerNorm and GELU match the formulas above. Run this from the nanoGPT directory.
+
+```python
+import math
+import pickle
+import torch
+from model import GPT, GPTConfig
+
+ckpt = torch.load('out-shakespeare-char/ckpt.pt', map_location='cpu')
+model = GPT(GPTConfig(**ckpt['model_args']))
+model.load_state_dict(ckpt['model'])
+model.eval()
+
+with open('data/shakespeare_char/meta.pkl', 'rb') as f:
+    stoi = pickle.load(f)['stoi']
+text = "GREMIO:\nGood morrow, neighbour Baptista.\n\nBAPTISTA:\nGood morrow,"
+idx = torch.tensor([[stoi[c] for c in text]])
+tr = model.transformer
+
+with torch.no_grad():
+    x = tr.drop(tr.wte(idx) + tr.wpe(torch.arange(idx.size(1))))
+    writes = [x]
+    for block in tr.h:
+        a = block.attn(block.ln_1(x))
+        x = x + a
+        m = block.mlp(block.ln_2(x))
+        x = x + m
+        writes += [a, m]
+
+    print(torch.allclose(sum(writes), x, atol=1e-5))
+    print([round(w[0, 52].norm().item(), 2) for w in writes])
+
+    ln = tr.h[0].ln_1
+    v = writes[0][0, 52]
+    manual = (v - v.mean()) / torch.sqrt(v.var(unbiased=False) + 1e-5) * ln.weight
+    print(torch.allclose(manual, ln(v), atol=1e-6))
+
+    u = torch.linspace(-3, 3, 7)
+    gelu = 0.5 * u * (1 + torch.erf(u / math.sqrt(2)))
+    print(torch.allclose(tr.h[0].mlp.gelu(u), gelu, atol=1e-6))
+```
+
+After the parameter count, the generation environment printed:
+
+```text
+True
+[0.83, 0.62, 5.85, 1.8, 2.15, 1.58, 3.53, 2.34, 4.25]
+True
+True
+```
+
+The first line shows that the last block's output equals the embedding plus the eight writes. The second lists the norms of the writes at position 52, matching the bars in the diagram. The third and fourth lines show that LayerNorm and GELU computed from the formulas match the modules' outputs.
+
+## Next chapter
+
+A Transformer block passes LayerNorm-normalized inputs to attention and the MLP and adds their outputs to the residual stream. Attention moves information between positions; the MLP adds up `4C` fixed vectors at each position with input-dependent coefficients. In the trained model, the stream's norm grew with depth while LayerNorm kept sublayer inputs on a consistent scale.
+
+After all blocks, the stream still holds `C`-component vectors. The next chapter follows how the final LayerNorm and `lm_head` turn them into vocabulary scores, and how softmax turns those into next-token probabilities.

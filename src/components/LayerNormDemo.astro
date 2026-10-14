@@ -1,0 +1,196 @@
+---
+import data from '../../public/site/data/nanogpt/residual-stream.json';
+import { barsPath, layerNorm, residualUi } from '../lib/residual';
+import type { Language } from '../lib/site';
+
+interface Props {
+  lang: Language;
+}
+const { lang } = Astro.props;
+const ui = residualUi[lang];
+const { input, weight } = data.layerNorm;
+const result = layerNorm(input, weight);
+// Pixels per unit for each chart; bars are clipped at ±38 pixels.
+const charts = [
+  { key: 'input', label: ui.input, values: input, scale: 60 },
+  {
+    key: 'normalized',
+    label: ui.normalized,
+    values: result.normalized,
+    scale: 9,
+  },
+  { key: 'output', label: ui.output, values: result.output, scale: 9 },
+];
+const payload = JSON.stringify({ input, weight });
+---
+
+<figure class="layer-norm" data-layer-norm data-payload={payload}>
+  <figcaption>{ui.layerNormCaption}</figcaption>
+  <p class="note">{ui.layerNormNote}</p>
+  <div class="controls">
+    <label>
+      {ui.shift}: <output data-shift-value>0.00</output>
+      <input
+        data-shift
+        type="range"
+        min="-0.25"
+        max="0.25"
+        step="0.01"
+        value="0"
+        disabled
+      />
+    </label>
+    <label>
+      {ui.scale}: <output data-scale-value>1.00</output>
+      <input
+        data-scale
+        type="range"
+        min="0.25"
+        max="4"
+        step="0.05"
+        value="1"
+        disabled
+      />
+    </label>
+  </div>
+  {charts.map((chart) => (
+    <div class="chart">
+      <p>
+        {chart.label}
+        {chart.key !== 'output' && (
+          <span class="stats">
+            {ui.mean}{' '}
+            <span data-stat={`${chart.key}-mean`}>
+              {chart.key === 'input' ? result.mean.toFixed(4) : '0.0000'}
+            </span>
+            {' · '}
+            {ui.std}{' '}
+            <span data-stat={`${chart.key}-std`}>
+              {chart.key === 'input' ? result.std.toFixed(4) : '1.0000'}
+            </span>
+          </span>
+        )}
+      </p>
+      <svg viewBox="0 0 600 80" role="img" aria-label={chart.label}>
+        <path d="M0 40H600" class="zero" />
+        <path
+          data-bars={chart.key}
+          data-scale={chart.scale}
+          d={barsPath(chart.values, 600, 40, chart.scale, 38)}
+          class:list={['bars', chart.key]}
+        />
+      </svg>
+    </div>
+  ))}
+</figure>
+
+<script>
+  import { barsPath, layerNorm } from '../lib/residual';
+
+  document
+    .querySelectorAll<HTMLElement>('[data-layer-norm]')
+    .forEach((root) => {
+      const { input, weight } = JSON.parse(root.dataset.payload!) as {
+        input: number[];
+        weight: number[];
+      };
+      const shift = root.querySelector<HTMLInputElement>('[data-shift]')!;
+      const scale = root.querySelector<HTMLInputElement>('[data-scale]')!;
+      const draw = (key: string, values: number[]) => {
+        const path = root.querySelector<SVGPathElement>(
+          `[data-bars="${key}"]`,
+        )!;
+        path.setAttribute(
+          'd',
+          barsPath(values, 600, 40, Number(path.dataset.scale), 38),
+        );
+      };
+      const update = () => {
+        const a = Number(shift.value);
+        const s = Number(scale.value);
+        root.querySelector('[data-shift-value]')!.textContent = a.toFixed(2);
+        root.querySelector('[data-scale-value]')!.textContent = s.toFixed(2);
+        const x = input.map((v) => v * s + a);
+        const result = layerNorm(x, weight);
+        draw('input', x);
+        draw('normalized', result.normalized);
+        draw('output', result.output);
+        const mean = result.normalized.reduce((p, v) => p + v, 0) / x.length;
+        const std = Math.sqrt(
+          result.normalized.reduce((p, v) => p + (v - mean) ** 2, 0) / x.length,
+        );
+        const stats = {
+          'input-mean': result.mean,
+          'input-std': result.std,
+          'normalized-mean': Math.abs(mean) < 5e-5 ? 0 : mean,
+          'normalized-std': std,
+        };
+        Object.entries(stats).forEach(([key, value]) => {
+          root.querySelector(`[data-stat="${key}"]`)!.textContent =
+            value.toFixed(4);
+        });
+      };
+      [shift, scale].forEach((control) => {
+        control.disabled = false;
+        control.addEventListener('input', update);
+      });
+    });
+</script>
+
+<style>
+  .layer-norm {
+    border-block: 1px solid var(--line-strong);
+    margin: 2rem 0;
+    padding: 1.25rem 0;
+  }
+  figcaption {
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+  }
+  .note {
+    color: var(--ink-secondary);
+    font-size: 0.8rem;
+  }
+  .controls {
+    display: grid;
+    gap: 0.5rem 2rem;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    font-size: 0.85rem;
+    margin: 1rem 0;
+  }
+  .controls label {
+    display: grid;
+    gap: 0.25rem;
+  }
+  output {
+    font-family: var(--font-mono);
+  }
+  .chart p {
+    font-size: 0.8rem;
+    margin: 0.75rem 0 0.25rem;
+  }
+  .stats {
+    color: var(--ink-muted);
+    font-family: var(--font-mono);
+    margin-left: 0.75rem;
+    white-space: nowrap;
+  }
+  svg {
+    display: block;
+    height: auto;
+    width: 100%;
+  }
+  .zero {
+    stroke: var(--line-strong);
+    stroke-width: 1;
+  }
+  .bars.input {
+    fill: #a05a20;
+  }
+  .bars.normalized {
+    fill: #276b92;
+  }
+  .bars.output {
+    fill: var(--accent);
+  }
+</style>

@@ -1,0 +1,212 @@
+---
+title: '誤差逆伝播'
+description: 'loss.backward() が損失からすべての重みの勾配を求める仕組みを、logits の勾配、残差ストリーム、共有した重み、causal mask による勾配の流れから確かめる。'
+order: 9
+series: nanogpt
+lang: ja
+translationKey: nanogpt-09-backpropagation
+slug: 09-backpropagation
+draft: false
+upstream:
+  repository: karpathy/nanoGPT
+  commit: 3adf61e154c3fe3fca428ad6bc3818b27a3b8291
+  sourceFiles:
+    - train.py
+    - model.py
+experimentId: nanogpt-09-backpropagation
+---
+
+import CrossEntropyToy from '../../../../components/CrossEntropyToy.astro';
+import GradientFlow from '../../../../components/GradientFlow.astro';
+import TiedGradient from '../../../../components/TiedGradient.astro';
+import GradientNorms from '../../../../components/GradientNorms.astro';
+
+## 損失から各重みへ
+
+前章で、バッチの予測を 1 つの損失 $\mathcal{L}$ にまとめました。損失を小さくするには、各重み $\theta$ を少し動かしたときに損失がどう変わるか、つまり**勾配** $\partial\mathcal{L}/\partial\theta$ が必要です。勾配の逆向きに重みを少し動かせば、損失は小さくなります。
+
+$$
+\theta \leftarrow \theta - \eta\,\frac{\partial\mathcal{L}}{\partial\theta}
+$$
+
+$\eta$ は学習率です。nanoGPT が実際に使う更新則 AdamW は次章で扱います。
+
+この章のモデルには約 80 万個の重みがあります。それらの勾配をまとめて求めるのが、[`train.py` の学習ループ](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L299-L305)にある次の行です。
+
+```python
+with ctx:
+    logits, loss = model(X, Y)
+    loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
+# immediately async prefetch next batch while model is doing the forward pass on the GPU
+X, Y = get_batch('train')
+# backward pass, with gradient scaling if training in fp16
+scaler.scale(loss).backward()
+```
+
+`scaler` は float16 で学習する場合に損失を拡大する仕組みで、CPU で float32 を使う第 11 章の設定では何もしません。したがって、実際に行われるのは `loss.backward()` です。この呼び出しが終わると、モデルのすべての `Parameter` について、同じ形状の勾配が `.grad` に入ります。
+
+## 連鎖律で逆向きにたどる
+
+PyTorch は、forward の計算で使った演算を順に記録しています。`backward()` はその記録を**逆順**にたどり、各演算で連鎖律を適用します。
+
+ある演算が入力 $\boldsymbol{u}$ から出力 $\boldsymbol{v}$ を作るとき、損失の $\boldsymbol{u}$ に対する勾配は、$\boldsymbol{v}$ に対する勾配から次のように求まります。
+
+$$
+\frac{\partial\mathcal{L}}{\partial u_i} = \sum_j \frac{\partial v_j}{\partial u_i}\,\frac{\partial\mathcal{L}}{\partial v_j}
+$$
+
+各演算は、後ろから届いた勾配 $\partial\mathcal{L}/\partial\boldsymbol{v}$ と、自分の入出力の関係 $\partial v_j/\partial u_i$ だけを使います。出口の損失から入口の埋め込みまで、この計算を順に繰り返すので、**誤差逆伝播（backpropagation）**と呼ばれます。逆向きの計算量は forward のおよそ 2 倍で、重みの数だけ forward を繰り返す必要はありません。
+
+## 出発点：logits の勾配
+
+逆向きの計算は損失から始まります。1 つの位置の cross entropy $\ell = -z_y + \log\sum_u \exp(z_u)$ を logits $z_v$ で微分すると、
+
+$$
+\frac{\partial\ell}{\partial z_v} = p_v - [v = y]
+$$
+
+となります。$[v = y]$ は正解のトークンで 1、それ以外で 0 です。nanoGPT の損失は $N = B\cdot T$ 個の位置の平均なので、各位置の勾配はさらに $1/N$ 倍されます。
+
+次の図は前章と同じ 5 種類のトークンの例に、勾配 $p - y$ を加えたものです。正解の logit には負の勾配がかかり、勾配の逆向きに動かすと logit が上がります。ほかのトークンには、その確率に比例した正の勾配がかかります。正解の確率が 1 に近づくと、すべての勾配が 0 に近づきます。
+
+<CrossEntropyToy lang="ja" showGradient />
+
+## 層を逆にたどる
+
+logits の勾配は、`lm_head`、`ln_f`、各 block を逆順に通って埋め込みまで届きます。代表的な演算の規則を確認します。
+
+**線形変換** $\boldsymbol{y} = W\boldsymbol{x}$ では、入力への勾配は $W^\top\,\partial\mathcal{L}/\partial\boldsymbol{y}$、重みへの勾配は $\partial\mathcal{L}/\partial\boldsymbol{y}$ と $\boldsymbol{x}$ の外積です。同じ重みを全バッチ・全位置で使うので、**重みの勾配は `B·T` 個の位置の外積の和**になります。
+
+**残差接続** $\boldsymbol{x}_{l+1} = \boldsymbol{x}_l + f(\boldsymbol{x}_l)$ では、
+
+$$
+\frac{\partial\mathcal{L}}{\partial\boldsymbol{x}_l}
+= \frac{\partial\mathcal{L}}{\partial\boldsymbol{x}_{l+1}}
++ \left(\frac{\partial f}{\partial\boldsymbol{x}_l}\right)^{\!\top}\frac{\partial\mathcal{L}}{\partial\boldsymbol{x}_{l+1}}
+$$
+
+となります。第 1 項は、サブレイヤーを経由せずにそのまま前の層へ届く勾配です。第 6 章で述べた残差ストリームの利点は、この項に対応します。
+
+**attention** では、位置 `t` の出力が自分自身とそれ以前の位置の value の重み付き和でした。逆向きには、位置 `t` の勾配が、参照の重みに応じて以前の位置へ分配されます。causal mask で重みが 0 の未来の位置には、勾配は届きません。
+
+次の図は、第 11 章で学習したモデルで、1 つの位置の損失 $\ell_t$ を各位置の埋め込みの和 $\boldsymbol{x}$（`wte` と `wpe` の和）で微分した勾配のノルムです。文字を選ぶと、その位置で次の文字を予測する損失についての勾配を、文字の背景の濃さで表示します。取り消し線の付いた文字は位置 `t` より後で、勾配はすべて 0 です。
+
+<GradientFlow lang="ja" />
+
+初期表示の位置 61 は、`morrow` の 2 つ目の `o` から `w` を予測する損失です。勾配のノルムが最も大きいのは単語の先頭の `m`（位置 57、`26.1`）と直前の `r`（位置 60、`24.4`）で、自分自身の位置 61（`16.4`）より大きくなっています。予測に使われた情報が、勾配を通してどの位置の入力に結び付いているかがわかります。
+
+勾配のノルムが 1 より大きいのは、埋め込みの値が小さく（第 6 章で見た位置 52 では標準偏差 `0.073`）、LayerNorm がその小さな標準偏差で割るためです。
+
+## 共有した重みには 2 つの経路から勾配が届く
+
+第 7 章で見たように、`wte.weight` は入力側の埋め込みと出力側の `lm_head` で同じ `Parameter` です。1 つの `Parameter` が複数の場所で使われると、autograd は**それぞれの経路の勾配を足し合わせて** `.grad` に入れます。
+
+次の図は、検証データの 64 文字について、`wte.weight` の 65 行それぞれに届いた勾配のノルムを経路ごとに分けたものです。分けるために、重みを共有しないコピーを作って同じ損失で backward し、2 つの勾配の和が共有した重みの勾配と一致することを確かめています。
+
+<TiedGradient lang="ja" />
+
+2 つの経路では、勾配の届き方が異なります。
+
+- **出力側**では、すべての位置で softmax の分母に全トークンの logits が含まれるため、65 行すべてに勾配が届きます。
+- **入力側**では、埋め込みとして取り出された行だけに勾配が届きます。この 64 文字に含まれる 32 種類の文字の行だけが 0 以外でした。
+
+この入力では、入力側の勾配（ノルム `0.12`〜`3.0`）が出力側（`0.0001`〜`0.77`）より大きくなっています。出力側の勾配が最も大きい行は `o`（`0.77`）、入力側は `n`（`3.0`）でした。
+
+## 勾配の大きさはパラメータごとに違う
+
+最後に、第 11 章の学習中に記録した、パラメータごとの勾配のノルムを見ます。値はクリップ前です。
+
+<GradientNorms lang="ja" />
+
+- **更新 0 回目**では、層 0 と層 1 の attention と MLP の `c_proj`（`1.40`〜`1.61`）が上位を占めました。一方、各層の `c_attn` と `c_fc` は `0.36`〜`0.53` でした。`c_proj` の重みは第 6 章の特別な初期化で小さいため、その手前へは $W^\top$ を通して小さくなった勾配が届きます。
+- **更新 100 回目以降**は、`wte`（`0.64`〜`1.29`）と `wpe` が最大になります。
+- LayerNorm の `weight` は、どの時点でも `0.001`〜`0.05` 程度で、ほかのパラメータより小さいままでした。
+
+勾配の大きさがパラメータによって 100 倍以上異なることは、次章で扱う AdamW が重みごとに更新幅を調整する理由の 1 つです。
+
+## コードで確かめる
+
+第 11 章のチェックポイントで、この章の 4 つの性質を確かめます。
+
+```python
+import copy
+import pickle
+import torch
+from torch import nn
+from torch.nn import functional as F
+from model import GPT, GPTConfig
+
+ckpt = torch.load('out-shakespeare-char/ckpt.pt', map_location='cpu')
+model = GPT(GPTConfig(**ckpt['model_args']))
+model.load_state_dict(ckpt['model'])
+model.eval()
+
+with open('data/shakespeare_char/meta.pkl', 'rb') as f:
+    stoi = pickle.load(f)['stoi']
+text = "GREMIO:\nGood morrow, neighbour Baptista.\n\nBAPTISTA:\nGood morrow, "
+ids = [stoi[c] for c in text]
+idx = torch.tensor([ids[:-1]])
+targets = torch.tensor([ids[1:]])
+V = model.config.vocab_size
+
+# 1. The gradient with respect to the logits
+logits, _ = model(idx, targets)
+logits = logits.detach().requires_grad_()
+F.cross_entropy(logits.view(-1, V), targets.view(-1)).backward()
+p = F.softmax(logits.detach(), dim=-1)
+print(torch.allclose(logits.grad, (p - F.one_hot(targets, V)) / 64, atol=1e-7))
+
+# 2. Autograd against a central difference (float64)
+m64 = copy.deepcopy(model).double()
+w = m64.transformer.h[0].attn.c_attn.weight
+m64(idx, targets)[1].backward()
+eps = 1e-6
+with torch.no_grad():
+    w[0, 0] += eps
+    plus = m64(idx, targets)[1].item()
+    w[0, 0] -= 2 * eps
+    minus = m64(idx, targets)[1].item()
+    w[0, 0] += eps
+print(f"{w.grad[0, 0].item():.10f} {(plus - minus) / (2 * eps):.10f}")
+
+# 3. The tied weight receives the sum of two paths
+model.zero_grad()
+model(idx, targets)[1].backward()
+untied = copy.deepcopy(model)
+untied.lm_head.weight = nn.Parameter(untied.lm_head.weight.detach().clone())
+untied.zero_grad()
+untied(idx, targets)[1].backward()
+g_in = untied.transformer.wte.weight.grad
+g_out = untied.lm_head.weight.grad
+print(torch.allclose(g_in + g_out, model.lm_head.weight.grad, atol=1e-7))
+print((g_in.abs().sum(dim=1) > 0).sum().item(), len(set(ids[:-1])))
+
+# 4. No gradient flows to later positions
+emb = model.transformer.wte(idx) + model.transformer.wpe(torch.arange(64))
+emb = emb.detach().requires_grad_()
+x = emb
+for block in model.transformer.h:
+    x = block(x)
+out = model.lm_head(model.transformer.ln_f(x))
+F.cross_entropy(out[0, 30][None], targets[0, 30][None]).backward()
+norms = emb.grad[0].norm(dim=-1)
+print(norms[31:].max().item(), [round(v, 2) for v in norms[28:31].tolist()])
+```
+
+パラメータ数の表示に続き、生成環境では次の結果が得られました。
+
+```text
+True
+0.0049686514 0.0049686513
+True
+32 32
+0.0 [5.02, 5.49, 5.86]
+```
+
+1 行目は、logits の勾配が $(p - y)/N$ に一致することを示します。2 行目は、層 0 の `c_attn.weight[0, 0]` について、autograd の勾配と、重みを $\pm 10^{-6}$ 動かして損失の差から求めた値の比較です。3 行目と 4 行目は、共有した重みの勾配が 2 つの経路の和であること、入力側の勾配が入力に含まれる 32 種類の文字の行だけに届くことを示します。最後の行は、位置 30 の損失から位置 31 以降へ届く勾配が 0 であることと、位置 28〜30 への勾配のノルムです。
+
+## 次の章へ
+
+`loss.backward()` は、forward で記録した演算を逆順にたどり、連鎖律で全パラメータの勾配を求めます。出発点の logits の勾配は $p - y$ で、残差接続は勾配をそのまま前の層へ渡し、causal mask は未来の位置への勾配を 0 にします。共有した重みには、入力側と出力側の勾配の和が届きます。
+
+勾配は、重みを動かす向きを教えてくれます。次章では、勾配を使って実際に重みを更新する AdamW と、学習率のスケジュール、勾配のクリップを含む学習ループ全体を読みます。

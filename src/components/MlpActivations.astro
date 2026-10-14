@@ -1,0 +1,243 @@
+---
+import data from '../../public/site/data/nanogpt/residual-stream.json';
+import { gelu, residualUi } from '../lib/residual';
+import { linearScale, linePath, ticks } from '../lib/plot';
+import type { Language } from '../lib/site';
+
+interface Props {
+  lang: Language;
+}
+const { lang } = Astro.props;
+const ui = residualUi[lang];
+const edges = data.histogramEdges;
+const width = 600;
+const height = 240;
+const margin = { left: 40, right: 12, top: 12, bottom: 32 };
+const x = linearScale(
+  [edges[0], edges[edges.length - 1]],
+  [margin.left, width - margin.right],
+);
+const y = linearScale([-1, 4], [height - margin.bottom, margin.top]);
+const curve = linePath(
+  Array.from({ length: 241 }, (_, i) => {
+    const u = -8 + (12 * i) / 240;
+    return [u, gelu(u)] as [number, number];
+  }),
+  x,
+  y,
+);
+const histogramPath = (counts: number[]) => {
+  const max = Math.max(...counts);
+  const base = y(0);
+  const top = margin.top;
+  return counts
+    .map((count, i) => {
+      const h = ((base - top) * count) / max;
+      const x0 = x(edges[i]);
+      const w = x(edges[i + 1]) - x0;
+      return `M${x0.toFixed(1)} ${base}h${(w - 0.6).toFixed(1)}v${(-h).toFixed(1)}h${(-(w - 0.6)).toFixed(1)}Z`;
+    })
+    .join('');
+};
+const initial = 0;
+const paths = data.mlpStats.map((stat) => histogramPath(stat.histogram));
+---
+
+<figure
+  class="mlp-activations"
+  data-mlp-activations
+  data-paths={JSON.stringify(paths)}
+  data-positive={JSON.stringify(data.mlpStats.map((s) => s.positiveFraction))}
+>
+  <figcaption>{ui.mlpCaption}</figcaption>
+  <fieldset>
+    <legend>{ui.layer}</legend>
+    {data.mlpStats.map((_, l) => (
+      <label>
+        <input
+          type="radio"
+          name={`mlp-layer-${lang}`}
+          value={l}
+          checked={l === initial}
+          disabled
+        />
+        {l}
+      </label>
+    ))}
+  </fieldset>
+  <p class="readout" aria-live="polite">
+    {ui.positive}:{' '}
+    <output data-positive-value>
+      {(data.mlpStats[initial].positiveFraction * 100).toFixed(1)}%
+    </output>
+  </p>
+  <svg
+    viewBox={`0 0 ${width} ${height}`}
+    role="img"
+    aria-label={`${ui.curve} / ${ui.histogram}`}
+  >
+    {ticks(-8, 4, 6).map((value) => (
+      <>
+        <path
+          d={`M${x(value)} ${margin.top}V${height - margin.bottom}`}
+          class="grid"
+        />
+        <text
+          x={x(value)}
+          y={height - margin.bottom + 16}
+          class="tick"
+          text-anchor="middle"
+        >
+          {value}
+        </text>
+      </>
+    ))}
+    {[-1, 0, 1, 2, 3, 4].map((value) => (
+      <>
+        <path
+          d={`M${margin.left} ${y(value)}H${width - margin.right}`}
+          class:list={['grid', { zero: value === 0 }]}
+        />
+        <text
+          x={margin.left - 6}
+          y={y(value) + 4}
+          class="tick"
+          text-anchor="end"
+        >
+          {value}
+        </text>
+      </>
+    ))}
+    <path data-histogram d={paths[initial]} class="histogram" />
+    <path d={curve} class="curve" />
+    <text
+      x={width - margin.right}
+      y={height - 4}
+      class="tick"
+      text-anchor="end"
+    >
+      u
+    </text>
+  </svg>
+  <p class="legend">
+    <span class="item">
+      <span class="key curve-key"></span>
+      {ui.curve}
+    </span>
+    <span class="item">
+      <span class="key histogram-key"></span>
+      {ui.histogram}
+    </span>
+  </p>
+  <p class="note">{ui.mlpNote}</p>
+</figure>
+
+<script>
+  document
+    .querySelectorAll<HTMLElement>('[data-mlp-activations]')
+    .forEach((root) => {
+      const paths = JSON.parse(root.dataset.paths!) as string[];
+      const positive = JSON.parse(root.dataset.positive!) as number[];
+      root.querySelectorAll<HTMLInputElement>('input').forEach((input) => {
+        input.disabled = false;
+        input.addEventListener('change', () => {
+          const layer = Number(input.value);
+          root
+            .querySelector('[data-histogram]')!
+            .setAttribute('d', paths[layer]);
+          root.querySelector('[data-positive-value]')!.textContent =
+            `${(positive[layer] * 100).toFixed(1)}%`;
+        });
+      });
+    });
+</script>
+
+<style>
+  .mlp-activations {
+    border-block: 1px solid var(--line-strong);
+    margin: 2rem 0;
+    padding: 1.25rem 0;
+  }
+  figcaption {
+    font-weight: 600;
+    margin-bottom: 1rem;
+  }
+  fieldset {
+    border: 0;
+    display: flex;
+    gap: 0.9rem;
+    margin: 0;
+    padding: 0;
+    font-size: 0.85rem;
+  }
+  legend {
+    float: left;
+    margin-right: 0.6rem;
+  }
+  label {
+    align-items: center;
+    display: inline-flex;
+    font-family: var(--font-mono);
+    gap: 0.2rem;
+  }
+  .readout,
+  .legend,
+  .note {
+    font-size: 0.8rem;
+  }
+  .note {
+    color: var(--ink-secondary);
+  }
+  output {
+    font-family: var(--font-mono);
+  }
+  svg {
+    display: block;
+    height: auto;
+    width: 100%;
+  }
+  .grid {
+    stroke: var(--line);
+    stroke-width: 0.7;
+  }
+  .grid.zero {
+    stroke: var(--ink-muted);
+  }
+  .tick {
+    fill: var(--ink-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+  .histogram {
+    fill: #276b92;
+    fill-opacity: 0.35;
+  }
+  .curve {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2.5;
+  }
+  .legend {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.2rem;
+  }
+  .item {
+    align-items: center;
+    display: inline-flex;
+    gap: 0.4rem;
+  }
+  .key {
+    display: inline-block;
+    height: 0.7rem;
+    width: 1.2rem;
+  }
+  .curve-key {
+    border-top: 3px solid var(--accent);
+    height: 0;
+  }
+  .histogram-key {
+    background: rgba(39, 107, 146, 0.35);
+  }
+</style>

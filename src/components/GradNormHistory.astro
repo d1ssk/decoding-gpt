@@ -1,0 +1,145 @@
+---
+import training from '../../public/site/data/nanogpt/tiny-training.json';
+import { trainingUi } from '../lib/training';
+import { linearScale, linePath, smooth, ticks } from '../lib/plot';
+import type { Language } from '../lib/site';
+
+interface Props {
+  lang: Language;
+}
+const { lang } = Astro.props;
+const ui = trainingUi[lang];
+const history = training.history;
+const clip = training.config.grad_clip;
+const maxIters = training.config.max_iters;
+const norms = history.map((row) => row[3] as number);
+const clipped = norms.filter((n) => n > clip).length;
+const width = 600;
+const height = 220;
+const margin = { left: 40, right: 12, top: 12, bottom: 36 };
+const x = linearScale([0, maxIters], [margin.left, width - margin.right]);
+const yMax = Math.ceil(Math.max(...norms));
+const y = linearScale([0, yMax], [height - margin.bottom, margin.top]);
+const raw = linePath(
+  history.map((row) => [row[0], row[3]] as [number, number]),
+  x,
+  y,
+);
+const smoothed = linePath(
+  smooth(norms, 0.95).map((v, i) => [history[i][0], v] as [number, number]),
+  x,
+  y,
+);
+---
+
+<figure class="grad-history">
+  <figcaption>{ui.gradCaption}</figcaption>
+  <svg
+    viewBox={`0 0 ${width} ${height}`}
+    role="img"
+    aria-label={ui.gradCaption}
+  >
+    {ticks(0, yMax, 4).map((v) => (
+      <>
+        <path
+          d={`M${margin.left} ${y(v)}H${width - margin.right}`}
+          class="grid"
+        />
+        <text x={margin.left - 6} y={y(v) + 4} class="tick" text-anchor="end">
+          {v}
+        </text>
+      </>
+    ))}
+    {ticks(0, maxIters, 4).map((v) => (
+      <text
+        x={x(v)}
+        y={height - margin.bottom + 16}
+        class="tick"
+        text-anchor="middle"
+      >
+        {v}
+      </text>
+    ))}
+    <text
+      x={width - margin.right}
+      y={height - 4}
+      class="tick"
+      text-anchor="end"
+    >
+      {ui.iteration}
+    </text>
+    <path d={raw} class="raw" />
+    <path d={smoothed} class="smoothed" />
+    <path
+      d={`M${margin.left} ${y(clip)}H${width - margin.right}`}
+      class="clip"
+    />
+    <text
+      x={width - margin.right - 4}
+      y={y(clip) - 5}
+      class="clip-label"
+      text-anchor="end"
+    >
+      grad_clip = {clip}
+    </text>
+  </svg>
+  <p class="summary">
+    {ui.clipped}: <strong>{clipped.toLocaleString('en-US')}</strong> /{' '}
+    {norms.length.toLocaleString('en-US')}
+  </p>
+  <p class="note">{ui.gradNote}</p>
+</figure>
+
+<style>
+  .grad-history {
+    border-block: 1px solid var(--line-strong);
+    margin: 2rem 0;
+    padding: 1.25rem 0;
+  }
+  figcaption {
+    font-weight: 600;
+    margin-bottom: 1rem;
+  }
+  svg {
+    display: block;
+    height: auto;
+    width: 100%;
+  }
+  .grid {
+    stroke: var(--line);
+    stroke-width: 0.7;
+  }
+  .tick {
+    fill: var(--ink-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+  .raw {
+    fill: none;
+    stroke: #276b92;
+    stroke-opacity: 0.35;
+    stroke-width: 0.8;
+  }
+  .smoothed {
+    fill: none;
+    stroke: #276b92;
+    stroke-width: 2;
+  }
+  .clip {
+    stroke: #a05a20;
+    stroke-dasharray: 6 4;
+    stroke-width: 1.5;
+  }
+  .clip-label {
+    fill: #a05a20;
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+  .summary,
+  .note {
+    font-size: 0.8rem;
+  }
+  .note {
+    color: var(--ink-secondary);
+  }
+</style>

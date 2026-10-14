@@ -1,0 +1,154 @@
+---
+import { headColors, headShapes, headSplitUi } from '../lib/multi-head';
+import type { Language } from '../lib/site';
+
+interface Props {
+  lang: Language;
+}
+const { lang } = Astro.props;
+const ui = headSplitUi[lang];
+const C = 128;
+const options = [1, 2, 4, 8, 16];
+const initial = 4;
+const cellWidth = 600 / C;
+---
+
+<figure class="head-split" data-head-split data-c={C}>
+  <figcaption>{ui.caption}</figcaption>
+  <fieldset>
+    <legend>{ui.heads}</legend>
+    {options.map((h) => (
+      <label>
+        <input
+          type="radio"
+          name={`head-split-${lang}`}
+          value={h}
+          checked={h === initial}
+          disabled
+        />
+        {h}
+      </label>
+    ))}
+  </fieldset>
+  <p class="strip-label">{ui.strip}</p>
+  <svg viewBox="0 0 600 34" role="img" aria-label={ui.strip}>
+    {Array.from({ length: C }, (_, c) => (
+      <rect
+        data-component={c}
+        x={c * cellWidth}
+        y="4"
+        width={cellWidth - 0.6}
+        height="22"
+        fill={headColors[Math.floor(c / (C / initial)) % headColors.length]}
+      />
+    ))}
+  </svg>
+  <dl class="numbers">
+    <div>
+      <dt>{ui.perHead}</dt>
+      <dd data-d>{C / initial}</dd>
+    </div>
+    <div>
+      <dt>{ui.scale}</dt>
+      <dd data-scale>{(1 / Math.sqrt(C / initial)).toFixed(4)}</dd>
+    </div>
+    <div>
+      <dt>{ui.params}</dt>
+      <dd>3C² + C² = {(4 * C * C).toLocaleString('en-US')}</dd>
+    </div>
+  </dl>
+  <pre
+    class="shapes"
+    aria-live="polite"
+  ><code data-shapes>{headShapes(initial, C)}</code></pre>
+  <p class="note">{ui.note}</p>
+</figure>
+
+<script>
+  import { headColors, headShapes } from '../lib/multi-head';
+
+  document
+    .querySelectorAll<HTMLElement>('[data-head-split]')
+    .forEach((root) => {
+      const C = Number(root.dataset.c);
+      const rects = root.querySelectorAll<SVGRectElement>('[data-component]');
+      const shapes = root.querySelector('[data-shapes]')!;
+      const update = (H: number) => {
+        const d = C / H;
+        rects.forEach((rect, c) =>
+          rect.setAttribute(
+            'fill',
+            headColors[Math.floor(c / d) % headColors.length],
+          ),
+        );
+        root.querySelector('[data-d]')!.textContent = String(d);
+        root.querySelector('[data-scale]')!.textContent = (
+          1 / Math.sqrt(d)
+        ).toFixed(4);
+        shapes.textContent = headShapes(H, C);
+      };
+      root.querySelectorAll<HTMLInputElement>('input').forEach((input) => {
+        input.disabled = false;
+        input.addEventListener('change', () => update(Number(input.value)));
+      });
+    });
+</script>
+
+<style>
+  .head-split {
+    border-block: 1px solid var(--line-strong);
+    margin: 2rem 0;
+    padding: 1.25rem 0;
+  }
+  figcaption {
+    font-weight: 600;
+    margin-bottom: 1rem;
+  }
+  fieldset {
+    border: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.1rem;
+    margin: 0;
+    padding: 0;
+    font-size: 0.85rem;
+  }
+  legend {
+    float: left;
+    margin-right: 0.8rem;
+    font-size: 0.85rem;
+  }
+  label {
+    align-items: center;
+    display: inline-flex;
+    font-family: var(--font-mono);
+    gap: 0.25rem;
+  }
+  .strip-label,
+  .note {
+    font-size: 0.8rem;
+    color: var(--ink-secondary);
+  }
+  svg {
+    display: block;
+    height: auto;
+    width: 100%;
+  }
+  .numbers {
+    display: grid;
+    gap: 0.3rem 1.5rem;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+    font-size: 0.8rem;
+    margin: 1rem 0;
+  }
+  .numbers dt {
+    color: var(--ink-muted);
+  }
+  .numbers dd {
+    font-family: var(--font-mono);
+    margin: 0;
+  }
+  .shapes {
+    margin: 1rem 0;
+  }
+</style>
