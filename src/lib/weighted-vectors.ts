@@ -1,4 +1,5 @@
 // Reproducible educational example; these are not trained nanoGPT values.
+// att is computed from the example queries and keys, as in nanoGPT.
 // Only the singleton head axis is omitted from the fixture arrays.
 export const exampleSeed = 29;
 let randomState = exampleSeed;
@@ -23,19 +24,50 @@ export const exampleValues = exampleInputs.map((sample) =>
     ),
   ),
 );
-// Hand-set causal coefficients keep the focus on value aggregation.
-export const exampleAttention = [
-  [
-    [1, 0, 0],
-    [0.7, 0.3, 0],
-    [0.2, 0.3, 0.5],
-  ],
-  [
-    [1, 0, 0],
-    [0.4, 0.6, 0],
-    [0.5, 0.2, 0.3],
-  ],
+// Educational query and key transformations of the same inputs. Rows are
+// output components; columns are input components. Both biases are zero.
+export const queryWeights = [
+  [0.8, 0.3],
+  [-0.2, 0.9],
 ];
+export const keyWeights = [
+  [-0.3, 0.8],
+  [0.9, 0.2],
+];
+const transform = (weights: number[][]) =>
+  exampleInputs.map((sample) =>
+    sample.map((vector) =>
+      weights.map((row) =>
+        row.reduce((sum, weight, c) => sum + weight * vector[c], 0),
+      ),
+    ),
+  );
+export const queries = transform(queryWeights);
+export const keys = transform(keyWeights);
+export const dotProducts = queries.map((sample, b) =>
+  sample.map((query) =>
+    keys[b].map((key) =>
+      query.reduce((sum, value, c) => sum + value * key[c], 0),
+    ),
+  ),
+);
+export const headSize = 2;
+// The same steps as nanoGPT: scale by 1/sqrt(d), mask j > t, softmax per row.
+export const scaledScores = dotProducts.map((sample) =>
+  sample.map((row) => row.map((value) => value / Math.sqrt(headSize))),
+);
+export const maskedScores = scaledScores.map((sample) =>
+  sample.map((row, t) => row.map((value, j) => (j > t ? -Infinity : value))),
+);
+export const exampleAttention = maskedScores.map((sample) =>
+  sample.map((row) => {
+    const max = Math.max(...row);
+    const exps = row.map((value) => Math.exp(value - max));
+    const total = exps.reduce((a, b) => a + b, 0);
+    return exps.map((value) => value / total);
+  }),
+);
+export const formatWeight = (value: number) => value.toFixed(3);
 export const vectorColors = ['#276b92', '#a05a20', '#79509b'];
 export const inputColor = '#454943';
 export const resultColor = '#1e5b49';

@@ -21,7 +21,7 @@ def generate(path):
     data = raw.decode("utf-8")
     chars = sorted(set(data))
     stoi = {char: index for index, char in enumerate(chars)}
-    sample = "To be, or not to be?"
+    sample = "GREMIO:\nGood morrow, neighbour Baptista."
     ids = [stoi[char] for char in sample]
     assert len(chars) == 65
     assert "".join(chars[index] for index in ids) == sample

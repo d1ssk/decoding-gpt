@@ -19,6 +19,7 @@ upstream:
 experimentId: nanogpt-01-text-to-tokens
 ---
 
+import CharacterFrequency from '../../../../components/CharacterFrequency.astro';
 import TokenInspector from '../../../../components/TokenInspector.astro';
 
 When you enter `hello` into GPT, the text is converted to a sequence of integers and passed to the model. This chapter follows nanoGPT's data preparation to see how text is divided into units and how those units receive IDs.
@@ -80,7 +81,7 @@ Sorting happens **only when building the vocabulary**. Encoding preserves input 
 
 ## Encode with the Shakespeare vocabulary
 
-The input below uses the 65-character vocabulary built from the full Tiny Shakespeare text with the same procedure as `data/shakespeare_char/prepare.py`. Each character is converted to the ID used in the training data as you type. Uppercase and lowercase letters have separate IDs; spaces and newlines also have IDs.
+The input below uses the 65-character vocabulary built from the full Tiny Shakespeare text with the same procedure as `data/shakespeare_char/prepare.py`. Each character is converted to the ID used in the training data as you type. Uppercase and lowercase letters have separate IDs; spaces and newlines also have IDs. The initial text is a passage near the start of the validation data `val.bin`; figures from chapter 5 onward use the same passage.
 
 <TokenInspector lang="en" />
 
@@ -88,7 +89,7 @@ The input below uses the 65-character vocabulary built from the full Tiny Shakes
 
 In the earlier Python example, numbering the sorted vocabulary assigns ID `2` to `h` and ID `4` to `o`. Each ID uniquely identifies its character. The character features learned by the model are represented in the embedding vector associated with that ID.
 
-[`GPT.forward()` in `model.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py) passes input IDs to `self.transformer.wte(idx)`. Each ID selects a row of the embedding table and retrieves its vector. Training updates the values in that vector. Chapter 3 will examine the vectors.
+[`GPT.forward()` in `model.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py) passes input IDs to `self.transformer.wte(idx)`. Each ID selects a row of the embedding table and retrieves its vector. Training updates the values in that vector. [Chapter 3](../03-embeddings-and-position/) examines the vectors.
 
 ## Save IDs as training data
 
@@ -138,6 +139,23 @@ Each `uint16` occupies two bytes, so each `.bin` file's size is twice its token 
 The `.bin` files store the IDs. Readers specify `uint16` and obtain the character mapping from `meta.pkl`. Running `prepare.py` again overwrites these three output files.
 
 During training, `train.py` reads the data using `np.memmap(..., dtype=np.uint16)`, slices the needed sections, and converts them to `int64` multidimensional arrays. When generating with a character model, `sample.py` reads `meta.pkl` to encode the prompt and decode generated IDs using the same mapping.
+
+## How often each character appears
+
+The 65 vocabulary characters do not appear equally often in the training data. The figure shows each character's share of the 1,003,854 characters in `train.bin`.
+
+<CharacterFrequency lang="en" />
+
+The most frequent character is the space at 15.3%, followed by `e` (8.5%), `t` (6.0%), and `o` (5.9%). Newlines make up 3.5%. All uppercase letters together account for only 7.8%; `$` appears once, `&` three times, and `3` 27 times. The validation data `val.bin` contains no `$`, `&`, `3`, or `X` at all.
+
+This imbalance alone already predicts the next character to some extent. The lower part of the figure shows how the mean loss on the validation data changes as a prediction uses more information. The loss is the mean negative log of the probability assigned to the correct character; smaller values mean better predictions. [Chapter 8](../08-loss/) covers it in detail.
+
+- Assigning equal probability to all 65 characters gives a loss of $\ln 65 \approx 4.174$.
+- Using the training-data frequencies as probabilities, without any context, lowers it to 3.347.
+- Counting next-character frequencies separately for each previous character gives 2.482.
+- The model trained in [chapter 11](../11-train-a-tiny-gpt/) predicts from up to 64 previous characters and reaches 1.886.
+
+In the chapter 11 run, the validation loss after 250 updates was 2.445, comparable to the prediction that uses only the previous character. Reaching 1.886 requires context longer than one previous character.
 
 ## What changes with GPT-2 BPE?
 

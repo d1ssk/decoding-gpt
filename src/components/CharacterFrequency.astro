@@ -1,0 +1,279 @@
+---
+import data from '../../public/site/data/nanogpt/character-frequency.json';
+import training from '../../public/site/data/nanogpt/tiny-training.json';
+import { frequencyUi } from '../lib/corpus';
+import { charLabel, linearScale, ticks } from '../lib/plot';
+import type { Language } from '../lib/site';
+
+interface Props {
+  lang: Language;
+}
+const { lang } = Astro.props;
+const ui = frequencyUi[lang];
+const total = data.trainTokens;
+const rows = data.orderByTrainCount.map((id) => ({
+  id,
+  char: data.vocabulary[id],
+  count: data.trainCounts[id],
+  share: data.trainCounts[id] / total,
+}));
+const percent = (share: number) =>
+  share >= 0.001
+    ? `${(share * 100).toFixed(2)}%`
+    : `${(share * 100).toFixed(4)}%`;
+
+const width = 640;
+const height = 230;
+const margin = { left: 40, right: 8, top: 12, bottom: 30 };
+const step = (width - margin.left - margin.right) / rows.length;
+const yMax = Math.ceil((rows[0].share * 100) / 2) * 2;
+const y = linearScale([0, yMax], [height - margin.bottom, margin.top]);
+
+const finalVal = training.evals[training.evals.length - 1].val;
+const losses = [
+  { key: 'uniform', value: data.baselines.uniform, label: ui.uniform },
+  { key: 'unigram', value: data.baselines.unigram, label: ui.unigram },
+  { key: 'bigram', value: data.baselines.bigram, label: ui.bigram },
+  { key: 'model', value: finalVal, label: ui.model },
+];
+const lossWidth = 640;
+const lossRow = 30;
+const lossMargin = { left: 12, right: 12, top: 8, bottom: 34 };
+const lossHeight = lossMargin.top + lossRow * losses.length + lossMargin.bottom;
+const lx = linearScale(
+  [1.5, 4.5],
+  [lossMargin.left, lossWidth - lossMargin.right],
+);
+---
+
+<figure class="character-frequency">
+  <figcaption>{ui.caption}</figcaption>
+  <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={ui.caption}>
+    {ticks(0, yMax, 4).map((v) => (
+      <>
+        <path
+          d={`M${margin.left} ${y(v)}H${width - margin.right}`}
+          class:list={['grid', { zero: v === 0 }]}
+        />
+        <text x={margin.left - 6} y={y(v) + 4} class="tick" text-anchor="end">
+          {v}%
+        </text>
+      </>
+    ))}
+    {rows.map((row, i) => {
+      const x0 = margin.left + i * step;
+      const top = y(row.share * 100);
+      return (
+        <g class="bar">
+          <title>
+            {`${charLabel(row.char)} (ID ${row.id}): ${row.count.toLocaleString('en-US')} · ${percent(row.share)}`}
+          </title>
+          <rect
+            x={x0}
+            y={margin.top}
+            width={step}
+            height={height - margin.bottom - margin.top}
+            class="hit"
+          />
+          <rect
+            x={x0 + 1}
+            y={top}
+            width={Math.max(step - 2, 1)}
+            height={Math.max(y(0) - top, 0.5)}
+            class="value"
+          />
+          <text
+            x={x0 + step / 2}
+            y={height - margin.bottom + 13}
+            class:list={[
+              'char',
+              { whitespace: row.char === ' ' || row.char === '\n' },
+            ]}
+            text-anchor="middle"
+          >
+            {charLabel(row.char)}
+          </text>
+        </g>
+      );
+    })}
+    <text x={margin.left} y={height - 2} class="tick">
+      {ui.axis}
+    </text>
+  </svg>
+  <p class="note">{ui.note}</p>
+
+  <p class="subcaption">{ui.lossCaption}</p>
+  <svg
+    viewBox={`0 0 ${lossWidth} ${lossHeight}`}
+    role="img"
+    aria-label={`${ui.lossCaption}: ${losses.map((l) => `${l.label} ${l.value.toFixed(3)}`).join(', ')}`}
+  >
+    {ticks(1.5, 4.5, 6).map((v) => (
+      <>
+        <path
+          d={`M${lx(v)} ${lossMargin.top}V${lossHeight - lossMargin.bottom}`}
+          class="grid"
+        />
+        <text
+          x={lx(v)}
+          y={lossHeight - lossMargin.bottom + 15}
+          class="tick"
+          text-anchor="middle"
+        >
+          {v}
+        </text>
+      </>
+    ))}
+    {losses.map((loss, i) => {
+      const cy = lossMargin.top + lossRow * i + lossRow / 2;
+      const right = lx(loss.value) > lossWidth / 2;
+      return (
+        <g>
+          <title>{`${loss.label}: ${loss.value.toFixed(4)}`}</title>
+          <path d={`M${lx(1.5)} ${cy}H${lx(loss.value)}`} class="stem" />
+          <circle
+            cx={lx(loss.value)}
+            cy={cy}
+            r="5"
+            class:list={['dot', loss.key]}
+          />
+          <text
+            x={lx(loss.value) + (right ? -10 : 10)}
+            y={cy + 4}
+            class="loss-label"
+            text-anchor={right ? 'end' : 'start'}
+          >
+            {loss.label}{' '}
+            <tspan class="loss-value">{loss.value.toFixed(3)}</tspan>
+          </text>
+        </g>
+      );
+    })}
+    <text
+      x={lossWidth - lossMargin.right}
+      y={lossHeight - 2}
+      class="tick"
+      text-anchor="end"
+    >
+      {ui.lossAxis}
+    </text>
+  </svg>
+  <p class="note">{ui.lossNote}</p>
+
+  <details>
+    <summary>{ui.table}</summary>
+    <div class="table-scroll" role="region" aria-label={ui.table} tabindex="0">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">{ui.char}</th>
+            <th scope="col">{ui.id}</th>
+            <th scope="col">{ui.count}</th>
+            <th scope="col">{ui.share}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr>
+              <td>{charLabel(row.char)}</td>
+              <td>{row.id}</td>
+              <td>{row.count.toLocaleString('en-US')}</td>
+              <td>{percent(row.share)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </details>
+</figure>
+
+<style>
+  .character-frequency {
+    border-block: 1px solid var(--line-strong);
+    margin: 2rem 0;
+    padding: 1.25rem 0;
+  }
+  figcaption,
+  .subcaption {
+    font-weight: 600;
+    margin-bottom: 1rem;
+  }
+  .subcaption {
+    margin-top: 1.75rem;
+  }
+  svg {
+    display: block;
+    height: auto;
+    width: 100%;
+  }
+  .grid {
+    stroke: var(--line);
+    stroke-width: 0.7;
+  }
+  .grid.zero {
+    stroke: var(--ink-muted);
+  }
+  .tick {
+    fill: var(--ink-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+  .hit {
+    fill: transparent;
+  }
+  .value {
+    fill: var(--accent);
+  }
+  .bar:hover .value {
+    fill: #2f6fb0;
+  }
+  .char {
+    fill: var(--ink-secondary);
+    font-family: var(--font-mono);
+    font-size: 9px;
+  }
+  .char.whitespace {
+    fill: var(--accent);
+    font-weight: 600;
+  }
+  .stem {
+    stroke: var(--line-strong);
+    stroke-width: 2;
+  }
+  .dot {
+    fill: var(--ink-secondary);
+    stroke: var(--paper);
+    stroke-width: 2;
+  }
+  .dot.model {
+    fill: var(--accent);
+  }
+  .loss-label {
+    fill: var(--ink);
+    font-size: 12px;
+  }
+  .loss-value {
+    fill: var(--ink-secondary);
+    font-family: var(--font-mono);
+  }
+  .note {
+    color: var(--ink-secondary);
+    font-size: 0.8rem;
+  }
+  details {
+    margin-top: 1rem;
+  }
+  summary {
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  .table-scroll {
+    max-height: 18rem;
+    overflow: auto;
+  }
+  table {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    white-space: nowrap;
+  }
+</style>

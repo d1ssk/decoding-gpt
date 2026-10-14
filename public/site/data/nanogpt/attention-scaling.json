@@ -1,0 +1,196 @@
+{
+  "experimentId": "nanogpt-04-attention-scaling",
+  "kind": "random-and-trained-character-gpt",
+  "upstreamCommit": "3adf61e154c3fe3fca428ad6bc3818b27a3b8291",
+  "modelSha256": "7c01703240dbec5d554527dc666e35b3df8391d0b117fddc07afcf325a21d11c",
+  "torchVersion": "2.8.0",
+  "positions": 64,
+  "trials": 4000,
+  "seed": 0,
+  "randomVectors": "q, k with independent N(0, 1) components; one query against 64 keys",
+  "effectivePositions": "exp(entropy of the softmax weights), averaged over trials",
+  "random": [
+    {
+      "d": 1,
+      "raw": {
+        "scoreStd": 0.9976,
+        "maxWeight": 0.0971,
+        "effectivePositions": 46.964
+      },
+      "scaled": {
+        "scoreStd": 0.9976,
+        "maxWeight": 0.0971,
+        "effectivePositions": 46.964
+      }
+    },
+    {
+      "d": 2,
+      "raw": {
+        "scoreStd": 1.4185,
+        "maxWeight": 0.1663,
+        "effectivePositions": 34.859
+      },
+      "scaled": {
+        "scoreStd": 1.003,
+        "maxWeight": 0.1035,
+        "effectivePositions": 44.113
+      }
+    },
+    {
+      "d": 4,
+      "raw": {
+        "scoreStd": 2.0084,
+        "maxWeight": 0.278,
+        "effectivePositions": 20.851
+      },
+      "scaled": {
+        "scoreStd": 1.0042,
+        "maxWeight": 0.1063,
+        "effectivePositions": 42.238
+      }
+    },
+    {
+      "d": 8,
+      "raw": {
+        "scoreStd": 2.8382,
+        "maxWeight": 0.4253,
+        "effectivePositions": 10.233
+      },
+      "scaled": {
+        "scoreStd": 1.0035,
+        "maxWeight": 0.1068,
+        "effectivePositions": 41.292
+      }
+    },
+    {
+      "d": 16,
+      "raw": {
+        "scoreStd": 4.0005,
+        "maxWeight": 0.5821,
+        "effectivePositions": 4.933
+      },
+      "scaled": {
+        "scoreStd": 1.0001,
+        "maxWeight": 0.1081,
+        "effectivePositions": 40.732
+      }
+    },
+    {
+      "d": 32,
+      "raw": {
+        "scoreStd": 5.6569,
+        "maxWeight": 0.6938,
+        "effectivePositions": 2.972
+      },
+      "scaled": {
+        "scoreStd": 1.0,
+        "maxWeight": 0.105,
+        "effectivePositions": 40.582
+      }
+    },
+    {
+      "d": 64,
+      "raw": {
+        "scoreStd": 7.963,
+        "maxWeight": 0.7918,
+        "effectivePositions": 2.056
+      },
+      "scaled": {
+        "scoreStd": 0.9954,
+        "maxWeight": 0.1072,
+        "effectivePositions": 40.43
+      }
+    },
+    {
+      "d": 128,
+      "raw": {
+        "scoreStd": 11.3417,
+        "maxWeight": 0.8519,
+        "effectivePositions": 1.64
+      },
+      "scaled": {
+        "scoreStd": 1.0025,
+        "maxWeight": 0.1071,
+        "effectivePositions": 40.183
+      }
+    },
+    {
+      "d": 256,
+      "raw": {
+        "scoreStd": 16.0136,
+        "maxWeight": 0.8965,
+        "effectivePositions": 1.397
+      },
+      "scaled": {
+        "scoreStd": 1.0009,
+        "maxWeight": 0.1067,
+        "effectivePositions": 40.216
+      }
+    }
+  ],
+  "modelEvaluation": "200 validation windows of 64 characters, torch.Generator seed 0; last position (63) for weight statistics",
+  "model": [
+    {
+      "iter": 0,
+      "sha256": "4e109aca2f020c1f82f4a0b73528da95b43339785e764a443a1faae81d0c9b6d",
+      "headSize": 32,
+      "layers": [
+        {
+          "queryComponentStd": 0.2268,
+          "scaledScoreStd": 0.0503,
+          "lastMaxWeight": 0.0175,
+          "lastEffectivePositions": 63.916
+        },
+        {
+          "queryComponentStd": 0.2299,
+          "scaledScoreStd": 0.0522,
+          "lastMaxWeight": 0.0173,
+          "lastEffectivePositions": 63.936
+        },
+        {
+          "queryComponentStd": 0.2275,
+          "scaledScoreStd": 0.0515,
+          "lastMaxWeight": 0.0175,
+          "lastEffectivePositions": 63.914
+        },
+        {
+          "queryComponentStd": 0.2239,
+          "scaledScoreStd": 0.0488,
+          "lastMaxWeight": 0.0172,
+          "lastEffectivePositions": 63.944
+        }
+      ]
+    },
+    {
+      "iter": 2000,
+      "sha256": "91fc38aba4b9feaf3938023cbab49ef99a6c550991dd14063b36507ffeac28cf",
+      "headSize": 32,
+      "layers": [
+        {
+          "queryComponentStd": 1.2921,
+          "scaledScoreStd": 5.9649,
+          "lastMaxWeight": 0.3222,
+          "lastEffectivePositions": 8.88
+        },
+        {
+          "queryComponentStd": 1.2442,
+          "scaledScoreStd": 4.9029,
+          "lastMaxWeight": 0.4992,
+          "lastEffectivePositions": 9.708
+        },
+        {
+          "queryComponentStd": 1.1943,
+          "scaledScoreStd": 4.1013,
+          "lastMaxWeight": 0.4505,
+          "lastEffectivePositions": 8.031
+        },
+        {
+          "queryComponentStd": 0.9994,
+          "scaledScoreStd": 2.5653,
+          "lastMaxWeight": 0.3103,
+          "lastEffectivePositions": 16.339
+        }
+      ]
+    }
+  ]
+}

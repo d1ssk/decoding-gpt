@@ -17,13 +17,14 @@ upstream:
 experimentId: nanogpt-02-training-batches
 ---
 
+import BatchCoverage from '../../../../components/BatchCoverage.astro';
 import BatchInspector from '../../../../components/BatchInspector.astro';
 
 The previous chapter converted text into token IDs and saved separate training and validation files. This chapter turns those long token sequences into inputs `x` and targets `y` for the model.
 
 ## Create inputs and targets from training data
 
-[`get_batch(split)` in `train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L109-L124) selects random positions in the saved data and slices inputs and targets for training. The argument `split` selects the data source: `'train'` reads the training file `train.bin`, and `'val'` reads the validation file `val.bin`.
+[`get_batch(split)` in `train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L116-L131) selects random positions in the saved data and slices inputs and targets for training. The argument `split` selects the data source: `'train'` reads the training file `train.bin`, and `'val'` reads the validation file `val.bin`.
 
 The training loop passes the `X, Y` returned by `get_batch()` to [`GPT.forward()` in `model.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py).
 
@@ -53,7 +54,7 @@ The model computes prediction scores, `logits`, for the next token at each posit
 
 ## The `get_batch()` implementation
 
-Here is the function from the source repository's [`train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L109-L124), with comments omitted. `data_dir` is the configured dataset directory, `data/<dataset>/`.
+Here is the function from the source repository's [`train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L116-L131), with comments omitted. `data_dir` is the configured dataset directory, `data/<dataset>/`.
 
 ```python
 def get_batch(split):
@@ -93,7 +94,7 @@ This illustrative example encodes the previous chapter's `hello\nhello\n` using 
 
 For token sequence `b` in the batch, the input available for prediction at position `t` is `X[b, :t+1]`, from the beginning of that sequence through the current position. The target is the next token, `Y[b, t]`. Adjust the prediction-position control above to inspect the visible input and its corresponding target.
 
-However, the model receives the entire input `X` at once. Except at the final position, the target `Y[b, t]` also appears at the next input position, `X[b, t+1]`. Access to this future token would reveal the target directly, defeating the learning task. To prevent this, [`CausalSelfAttention`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py) uses a **causal mask**, allowing each position to access only itself and earlier positions. The arrays produced by `get_batch()` are passed directly to the model; the causal mask restricts the visible range during self-attention computation. Chapter 4, “Self-Attention,” will cover this mechanism.
+However, the model receives the entire input `X` at once. Except at the final position, the target `Y[b, t]` also appears at the next input position, `X[b, t+1]`. Access to this future token would reveal the target directly, defeating the learning task. To prevent this, [`CausalSelfAttention`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py) uses a **causal mask**, allowing each position to access only itself and earlier positions. The arrays produced by `get_batch()` are passed directly to the model; the causal mask restricts the visible range during self-attention computation. [Chapter 4](../04-self-attention/) covers this mechanism.
 
 This allows the model to compute predictions at all `B × T` positions in parallel during one forward pass, while limiting each position to information available up to that point. Each prediction is compared with its corresponding target `Y[b, t]` to calculate the loss.
 
@@ -103,7 +104,70 @@ During training, batches from `train.bin` are passed to the model, and the predi
 
 Validation uses batches of the same shape from `val.bin` to calculate the loss, while leaving the weights unchanged. The losses from several batches are averaged to evaluate prediction performance on data that was not used for training.
 
-Here, `batch_size` is the number of token sequences passed to the model in one forward pass. Training can accumulate gradients computed over several batches before updating the weights once. As a result, `batch_size` does not necessarily equal the total number of token sequences used for one weight update. The training-loop chapter will cover gradient accumulation, weight updates, and how training and validation are organized.
+Here, `batch_size` is the number of token sequences passed to the model in one forward pass. Training can accumulate gradients computed over several batches before updating the weights once. As a result, `batch_size` does not necessarily equal the total number of token sequences used for one weight update. [Chapter 10](../10-training-loop/) covers gradient accumulation, weight updates, and how training and validation are organized.
+
+## Random starts and how the data is used
+
+The model trained in [chapter 11](../11-train-a-tiny-gpt/) uses `batch_size = 12` and `block_size = 64`, so each update consumes 12 sequences × 64 characters = 768 input characters. The 2,001 updates use 24,012 inputs, about 1.54 million characters in total, or about 1.5 times the 1,003,854 characters of training data.
+
+Because `get_batch()` draws every start position independently at random, “about 1.5 times” does not mean that every character is used 1.5 times. We recorded the start positions actually drawn in the chapter 11 run and counted how many times each training-data position appeared in an input `X`.
+
+<BatchCoverage lang="en" />
+
+- The mean is 1.53 times, yet 21.6% of the training data (216,744 positions) never appeared in any input. The most frequently used positions appeared 9 times.
+- The distribution of counts closely matches a Poisson estimate that treats positions as independently selected (21.6% at zero).
+- Of the 24,012 inputs, 274 repeated a start position already used by another input.
+- The share of positions included in at least one input is 31.8% after 500 updates and 78.4% after 2,001.
+
+nanoGPT measures training length by the number of updates, `max_iters`, rather than by passes over the data. The chapter 11 run ends without ever using about a fifth of the training data as input.
+
+## Verify in code
+
+Using the same steps as `get_batch()`, build one batch from the Tiny Shakespeare training data and check its shape and the one-token shift. Run this in the nanoGPT directory after running `data/shakespeare_char/prepare.py` from [chapter 1](../01-text-to-tokens/). The transfer to a device is omitted.
+
+```python
+import os
+import pickle
+import numpy as np
+import torch
+
+data_dir = os.path.join('data', 'shakespeare_char')
+batch_size, block_size = 12, 64
+
+with open(os.path.join(data_dir, 'meta.pkl'), 'rb') as f:
+    itos = pickle.load(f)['itos']
+
+def get_batch(split):
+    data = np.memmap(os.path.join(data_dir, f'{split}.bin'), dtype=np.uint16, mode='r')
+    ix = torch.randint(len(data) - block_size, (batch_size,))
+    x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
+    y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
+    return x, y
+
+torch.manual_seed(0)
+X, Y = get_batch('train')
+decode = lambda ids: ''.join(itos[i] for i in ids.tolist())
+
+print(list(X.shape), list(Y.shape), X.dtype)
+print(torch.equal(X[:, 1:], Y[:, :-1]))
+print(repr(decode(X[0, :24])))
+print(repr(decode(Y[0, :24])))
+print(len(np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')))
+```
+
+With PyTorch 2.8.0 on CPU, the output was:
+
+```text
+[12, 64] [12, 64] torch.int64
+True
+'lking with a priest, lor'
+'king with a priest, lord'
+1003854
+```
+
+The first line shows that `X` and `Y` are both `int64` arrays of shape `[12, 64]`. The `True` on the second line shows that `X` from its second column onward equals `Y` without its last column: in every row, `Y` is `X` shifted by one token. The third and fourth lines decode the first 24 characters of the first sequence. The last line is the number of tokens in `train.bin`.
+
+The seed here is fixed at 0. `train.py` draws its first batch after initializing the model, so this result differs from the first batch of the chapter 11 run.
 
 ## In the next chapter
 

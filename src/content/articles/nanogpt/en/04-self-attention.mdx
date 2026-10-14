@@ -17,6 +17,8 @@ experimentId: nanogpt-04-self-attention
 
 import WeightedVectorSum from '../../../../components/WeightedVectorSum.astro';
 import QueryKeyDotProducts from '../../../../components/QueryKeyDotProducts.astro';
+import ScoresToWeights from '../../../../components/ScoresToWeights.astro';
+import AttentionScaling from '../../../../components/AttentionScaling.astro';
 
 ## From embeddings to context-dependent representations
 
@@ -34,15 +36,11 @@ x = x + self.attn(self.ln_1(x))
 
 `self.ln_1(x)` normalizes each position's vector and passes the resulting array to `self.attn`. `self.attn` is an instance of `CausalSelfAttention`, created in `Block.__init__()`. The called method, `CausalSelfAttention.forward(self, x)`, receives that array as its argument `x`. **From here on, `x` denotes the input inside this method.** The `x` in `Block.forward()` is the value before normalization; the `x` inside attention is the normalized value.
 
-**This chapter examines the inside of `self.attn`.** The queries, keys, values, attention weights, and weighted sums introduced below are all parts of this call.
-
-Attention takes an array of shape `[B, T, C]` and returns an array of the same shape. Each output position contains information gathered from itself and earlier positions. `Block.forward()` adds this return value to the original `x`, forming a residual connection. Chapter 06 will examine LayerNorm and this residual connection in detail.
-
-The next section starts with the aggregation code near the end of `CausalSelfAttention.forward()`. After examining its array structure and illustrating the computation with vector diagrams, we trace how the input produces both the vectors to combine and their attention weights.
+Attention takes an array of shape `[B, T, C]` and returns an array of the same shape. Each output position contains information gathered from itself and earlier positions. `Block.forward()` adds this return value to the original `x`, forming a residual connection. [Chapter 6](../06-mlp-and-residual-stream/) examines LayerNorm and this residual connection in detail.
 
 ## Add vectors with weights
 
-We now enter `CausalSelfAttention.forward()`, the implementation behind the `self.attn` call from the previous section. Start with **the step that aggregates information from positions**, near the end of the function. In the source's explicit computation path, this is one line:
+We read `CausalSelfAttention.forward()`, the implementation behind `self.attn`, starting with **the step that aggregates information from positions**, near the end of the function. In the source's explicit computation path, this is one line:
 
 ```python
 y = att @ v
@@ -72,7 +70,7 @@ We can draw `v` and `y` as **grids with `B` rows and `T` columns, each cell cont
 
 The illustrative example below uses `B = 2`, `T = 3`, and `C = 2`. It starts with the attention input `x`, an array of shape `[B, T, C]`.
 
-The inputs and linear transformation weights are generated using a fixed random seed. Applying the same linear transformation to the input at every position produces `v`. The coefficients in `att` are chosen for illustration, and `y` is computed as `att @ v`.
+The inputs and linear transformation weights are generated using a fixed random seed. Applying the same linear transformation to the input at every position produces `v`. `att` already uses the values computed, with nanoGPT's procedure, from the queries and keys introduced later in this chapter, and `y` is computed as `att @ v`.
 
 **Select a cell in `x`.** Follow `x`, `v`, `att`, the coefficient × vector computation, and finally `y` from top to bottom. The selected position and the rows of `v` and `att` used in the computation are highlighted.
 
@@ -94,7 +92,7 @@ $$
 
 `y = att @ v` performs this computation for all output positions together, producing `y` of shape `[B, 1, T, C]`. Each sample and head is computed independently.
 
-In this example, we supplied the coefficients in `att`. In self-attention, **both the vectors to combine and their attention weights are produced from the input.** The next section introduces the queries, keys, and values used to do this.
+In this example, `att` comes from queries and keys that we have not yet explained. In self-attention, **both the vectors to combine and their attention weights are produced from the input.** The next section introduces the queries, keys, and values used to do this.
 
 ## Create queries, keys, and values
 
@@ -183,6 +181,16 @@ Select sample `b` in either table to highlight the same row in both tables and s
 
 <QueryKeyDotProducts lang="en" />
 
+### Why divide by `√d`
+
+If the components of a query and a key are independent values with mean 0 and variance 1, their dot product $\sum_c q_c k_c$ is a sum of $d$ terms, so its variance is $d$ and its standard deviation is $\sqrt{d}$. Dividing by `√d` brings the standard deviation back to 1 for any `d`. The figure checks this relation, and the spread of the weights after softmax, with one random query and 64 random keys.
+
+<AttentionScaling lang="en" />
+
+Without the division, at `d = 32` (the head size of the [chapter 11](../11-train-a-tiny-gpt/) model) the scores have a standard deviation of 5.66, and after softmax the effective number of attended positions drops to 3.0 out of 64. At `d = 256` it is 1.4, with the weight concentrated almost entirely on one position. With the division, the weight spreads over about 40 positions for every `d`.
+
+Learned queries and keys do not follow this assumption. Measured on 200 validation windows, the chapter 11 model has scaled scores with a standard deviation of 2.6–6.0 per layer, and position 63 effectively attends to 8–16 positions. Before training, the weights are small, the standard deviation is about 0.05, and the weights are spread almost evenly over all 64 positions. Dividing by `√d` keeps the scale of the scores independent of `d`; the learned Q and K transformations determine how sharply each position attends.
+
 ## Causal masking and softmax
 
 Autoregressive language models such as nanoGPT predict the next token from the tokens through position `t`. Training processes the entire input sequence together, so allowing each position to access future tokens would reveal information about its prediction target. Each position is therefore restricted to itself and earlier positions. A _causal mask_ enforces this restriction.
@@ -218,6 +226,14 @@ $$
 Because `exp(−∞) = 0`, future positions receive zero weight. In the code, `dim=-1` specifies that softmax is computed along the source-position axis `j`.
 
 Each position now assigns nonnegative weights summing to `1` to itself and earlier positions. These are the **weights used to aggregate values**.
+
+The next figure uses the same example as the previous two and lays out the three steps that turn scores into attention weights.
+
+<ScoresToWeights lang="en" />
+
+The “after softmax” table holds the same values as `att` in the first figure. Row `0` is always `[1, 0, 0]` because position `0` can attend only to itself. Increasing the factor concentrates each row's weight on the position with the largest score; decreasing it moves the weights toward uniform. Multiplying by a factor is equivalent to dividing by a value other than `√d`.
+
+Future positions whose weights the causal mask sets to `0` also receive no gradient during training. [Chapter 9](../09-backpropagation/) shows this in the trained model.
 
 ## Aggregate values and produce the output
 
@@ -353,4 +369,4 @@ The `True` on the third line shows that changing future position `4` leaves the 
 
 The embeddings from the previous chapter depended only on the token and position at each location. Self-attention computes input-dependent attention weights from queries and keys, then uses those weights to aggregate values. The causal mask restricts each position to itself and earlier positions. Passing the result through `c_proj` and adding it to the original array incorporates contextual information into each position's representation.
 
-This chapter followed the computation with one head. The next chapter covers multi-head attention, where multiple heads each aggregate information and their outputs are combined.
+This chapter followed the computation with one head. [The next chapter](../05-multi-head-attention/) covers multi-head attention, where multiple heads each aggregate information and their outputs are combined.

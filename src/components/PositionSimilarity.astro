@@ -1,0 +1,240 @@
+---
+import data from '../../public/site/data/nanogpt/trained-embeddings.json';
+import { positionSimilarityUi } from '../lib/trained-embeddings';
+import { linearScale, linePath } from '../lib/plot';
+import type { Language } from '../lib/site';
+
+interface Props {
+  lang: Language;
+}
+const { lang } = Astro.props;
+const ui = positionSimilarityUi[lang];
+const initialStage = data.stages.length - 1;
+const T = data.stages[0].positionCosine.length;
+const width = 600;
+const height = 200;
+const margin = { left: 40, right: 12, top: 12, bottom: 36 };
+const x = linearScale([0, T - 1], [margin.left, width - margin.right]);
+const y = linearScale([-1, 1], [height - margin.bottom, margin.top]);
+const paths = data.stages.map((stage) =>
+  linePath(
+    stage.positionCosineByDistance.map((v, k) => [k, v] as [number, number]),
+    x,
+    y,
+  ),
+);
+const legendStops = [-1, -0.5, 0, 0.5, 1];
+---
+
+<figure
+  class="position-similarity"
+  data-position-similarity
+  data-maps={JSON.stringify(data.stages.map((s) => s.positionCosine))}
+  data-paths={JSON.stringify(paths)}
+  data-initial={initialStage}
+>
+  <figcaption>{ui.caption}</figcaption>
+  <fieldset>
+    <legend>{ui.stage}</legend>
+    {data.stages.map((stage, s) => (
+      <label>
+        <input
+          type="radio"
+          name={`position-similarity-stage-${lang}`}
+          value={s}
+          checked={s === initialStage}
+          disabled
+        />
+        {ui.stageLabel(stage.iter)}
+      </label>
+    ))}
+  </fieldset>
+  <div class="panels">
+    <div>
+      <canvas
+        data-heatmap
+        width={T * 6}
+        height={T * 6}
+        role="img"
+        aria-label={`${ui.caption}. ${ui.heatmap}`}
+      ></canvas>
+      <p class="note">{ui.heatmap}</p>
+      <div class="scale" aria-hidden="true">
+        <span class="bar"></span>
+        <span class="labels">
+          {legendStops.map((v) => (
+            <span>{v}</span>
+          ))}
+        </span>
+      </div>
+      <p class="note">{ui.note}</p>
+    </div>
+    <div>
+      <p class="subcaption">{ui.distanceCaption}</p>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label={ui.distanceCaption}
+      >
+        {[-1, -0.5, 0, 0.5, 1].map((v) => (
+          <>
+            <path
+              d={`M${margin.left} ${y(v)}H${width - margin.right}`}
+              class:list={['grid', { zero: v === 0 }]}
+            />
+            <text
+              x={margin.left - 6}
+              y={y(v) + 4}
+              class="tick"
+              text-anchor="end"
+            >
+              {v}
+            </text>
+          </>
+        ))}
+        {[0, 16, 32, 48, 63].map((v) => (
+          <text
+            x={x(v)}
+            y={height - margin.bottom + 15}
+            class="tick"
+            text-anchor="middle"
+          >
+            {v}
+          </text>
+        ))}
+        <path data-distance d={paths[initialStage]} class="line" />
+        <text
+          x={width - margin.right}
+          y={height - 4}
+          class="tick"
+          text-anchor="end"
+        >
+          {ui.distance}
+        </text>
+      </svg>
+    </div>
+  </div>
+</figure>
+
+<script>
+  import { cosineColor } from '../lib/trained-embeddings';
+
+  document
+    .querySelectorAll<HTMLElement>('[data-position-similarity]')
+    .forEach((root) => {
+      const maps = JSON.parse(root.dataset.maps!) as number[][][];
+      const paths = JSON.parse(root.dataset.paths!) as string[];
+      const canvas = root.querySelector<HTMLCanvasElement>('[data-heatmap]')!;
+      const context = canvas.getContext('2d')!;
+      const draw = (stage: number) => {
+        const map = maps[stage];
+        map.forEach((row, t) =>
+          row.forEach((value, j) => {
+            context.fillStyle = cosineColor(value / 1000);
+            context.fillRect(j * 6, t * 6, 6, 6);
+          }),
+        );
+        root.querySelector('[data-distance]')!.setAttribute('d', paths[stage]);
+      };
+      root
+        .querySelectorAll<HTMLInputElement>('input[type="radio"]')
+        .forEach((input) => {
+          input.disabled = false;
+          input.addEventListener('change', () => draw(Number(input.value)));
+        });
+      draw(Number(root.dataset.initial));
+    });
+</script>
+
+<style>
+  .position-similarity {
+    border-block: 1px solid var(--line-strong);
+    margin: 2rem 0;
+    padding: 1.25rem 0;
+  }
+  figcaption,
+  .subcaption {
+    font-weight: 600;
+    margin-bottom: 1rem;
+  }
+  fieldset {
+    border: 0;
+    display: flex;
+    flex-wrap: wrap;
+    font-size: 0.85rem;
+    gap: 0.4rem 1rem;
+    margin: 0 0 0.75rem;
+    padding: 0;
+  }
+  legend {
+    float: left;
+    margin-right: 0.6rem;
+  }
+  label {
+    align-items: center;
+    display: inline-flex;
+    gap: 0.25rem;
+  }
+  .panels {
+    display: grid;
+    gap: 1.5rem;
+  }
+  .panels > div:first-child {
+    max-width: 22rem;
+  }
+  canvas {
+    aspect-ratio: 1;
+    display: block;
+    height: auto;
+    image-rendering: pixelated;
+    width: 100%;
+  }
+  svg {
+    display: block;
+    height: auto;
+    width: 100%;
+  }
+  .scale {
+    display: grid;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    gap: 0.2rem;
+    margin-top: 0.5rem;
+  }
+  .scale .bar {
+    background: linear-gradient(
+      to right,
+      rgb(47, 111, 176),
+      rgb(247, 246, 242),
+      rgb(192, 98, 31)
+    );
+    border: 1px solid var(--line);
+    height: 0.6rem;
+  }
+  .scale .labels {
+    color: var(--ink-muted);
+    display: flex;
+    justify-content: space-between;
+  }
+  .grid {
+    stroke: var(--line);
+    stroke-width: 0.7;
+  }
+  .grid.zero {
+    stroke: var(--ink-muted);
+  }
+  .tick {
+    fill: var(--ink-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+  .line {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2;
+  }
+  .note {
+    color: var(--ink-secondary);
+    font-size: 0.8rem;
+  }
+</style>

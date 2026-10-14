@@ -2,6 +2,8 @@
 interface PipelineStep {
   label: string;
   detail?: string;
+  href?: string;
+  chapters?: string;
 }
 
 interface Props {
@@ -23,6 +25,11 @@ const { steps, caption, note } = Astro.props;
         </span>
         <strong>{step.label}</strong>
         {step.detail && <small>{step.detail}</small>}
+        {step.href && (
+          <a class="pipeline__link" href={step.href}>
+            {step.chapters}
+          </a>
+        )}
       </li>
     ))}
   </ol>
@@ -96,6 +103,12 @@ const { steps, caption, note } = Astro.props;
     font-size: 0.68rem;
     line-height: 1.45;
     margin-top: 0.35rem;
+  }
+
+  .pipeline__link {
+    display: inline-block;
+    font-size: 0.72rem;
+    margin-top: 0.4rem;
   }
 
   figcaption {

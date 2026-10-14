@@ -108,9 +108,36 @@ npx prettier --write public/site/data/nanogpt/shakespeare-tokenizer.json
 
 The generator verifies the corpus SHA-256 and records both source commits in the
 artifact. Only the vocabulary and initial example are published, not the corpus.
+The initial example is the validation passage (`GREMIO:` …) that chapters 05–09
+inspect, so readers meet the same text from chapter 01 onward.
 `TokenInspector.astro` renders the initial IDs at build time and encodes edited
 input in the browser with that fixed vocabulary. Unknown characters produce an
 error. No network or Python runtime is needed to use the demo.
+
+## Overview figures
+
+Chapter 00's `PipelineDiagram.astro` accepts an optional `href` and `chapters`
+label per step; links are relative (`../01-text-to-tokens/`) so they work under
+the base path in both languages. `SampleComparison.astro` shows the opening of
+the iteration-0 and iteration-2000 samples from `tiny-samples.json` without
+JavaScript.
+
+## Character frequencies
+
+Chapter 01 also shows how often each character appears in `train.bin` and the
+validation loss of frequency-only predictions. With the prepared local nanoGPT
+data (see “Local nanoGPT dataset preparation”), run with NumPy:
+
+```bash
+lab/nanogpt/.venv/bin/python experiments/nanogpt/character_frequency.py public/data/nanogpt
+```
+
+The artifact `character-frequency.json` holds training and validation counts and
+three baselines on the validation targets: uniform (`ln 65`), unigram, and bigram
+(previous character), both with add-one smoothing of the training counts.
+`CharacterFrequency.astro` renders the bars and a loss scale at build time; the
+chapter 11 value on that scale comes from `tiny-training.json`. No JavaScript is
+needed.
 
 ## Training batch example
 
@@ -134,6 +161,26 @@ comments omitted, followed by an interactive section. The demo shows source
 indices, IDs, and characters in three rows; the input and target tables emphasize
 IDs. Prediction examples show IDs first, with characters in parentheses.
 When changing the excerpt, verify it against the pinned source commit.
+
+## Batch coverage
+
+Chapter 02 counts how often each `train.bin` position appeared in an input `X`
+during the chapter 11 run. `experiments/nanogpt/batch_coverage.py` reruns that
+training through `tiny_gpt.train()` with an `on_batch` hook that records start
+positions without drawing random numbers (about 30 seconds on CPU):
+
+```bash
+lab/nanogpt/.venv/bin/python experiments/nanogpt/batch_coverage.py public/data/nanogpt
+```
+
+Start positions depend only on the random sequence. The generator checks the rerun
+against all 2,001 per-iteration losses in `tiny-training.json` (within 5e-5);
+final weights can differ from the snapshot by float rounding (about 1e-4) because
+CPU kernels are not bitwise deterministic. Batches drawn by `estimate_loss()` run
+in eval mode and are excluded. `BatchCoverage.astro` renders the count histogram
+with a Poisson estimate and the covered share by update, without JavaScript.
+The chapter's runnable `get_batch()` check uses seed 0 and is unrelated to the
+run's first batch.
 
 ## Embedding example
 
@@ -171,6 +218,26 @@ The sum stays fixed during translation. Numeric tables and the initial SVG also
 render without JavaScript. This uses SVG and pointer events with no plotting
 dependency or external runtime service.
 
+## Trained embeddings
+
+Chapter 03 compares `wte` and `wpe` after 0 and 2,000 updates of the chapter 11
+run, using the local snapshots:
+
+```bash
+lab/nanogpt/.venv/bin/python experiments/nanogpt/trained_embeddings.py public/data/nanogpt
+```
+
+`trained-embeddings.json` holds, per stage, the two leading principal components
+of the 65 token rows (signs fixed so that the space has negative PC1 and `.`
+positive PC2), explained-variance ratios, the correlation of PC1 with log training
+counts, cosine-similarity arrays for tokens (65 × 65) and positions (64 × 64) in
+per mille, mean position similarity by distance, and group means (vowels,
+consonants, uppercase, symbols, case pairs). `EmbeddingMap.astro` places each
+character as a glyph colored by class (a palette validated for color-vision
+deficiency; the glyph itself is the label) and lists cosine neighbors of a selected
+character. `PositionSimilarity.astro` draws the position heatmap on a canvas with
+a blue–paper–orange diverging scale and the by-distance curve as SVG.
+
 ## Self-attention example
 
 Chapter 04 follows one head in the same initialized model as Chapter 03. Generate
@@ -186,7 +253,7 @@ records configuration, environment, source provenance, and intermediate arrays f
 the original input and two single-token changes (past and future relative to
 position 3). Each input has causal and unmasked computations; the unmasked mode
 is an educational intervention, not normal nanoGPT inference. No checkpoint is
-saved. The hand-set opening example is separate from these untrained-model data.
+saved. The opening toy example is separate from these untrained-model data.
 
 Checks compare manual aggregation with PyTorch scaled dot product attention in
 both modes and compare causal projected outputs with the actual nanoGPT module.
@@ -199,7 +266,11 @@ The opening weighted-sum example in `WeightedVectorSum.astro` is an independent
 illustration with two samples, three positions, and two components. In
 `src/lib/weighted-vectors.ts`, a fixed seed (29) generates signed input vectors
 and shared linear transformation weights. Applying those weights with zero bias
-produces `v`; hand-set causal attention coefficients produce `y = att @ v`.
+produces `v`. The same module applies the documented query and key weights to
+the inputs, scales the dot products by `1/√2` (`d = 2`), applies the causal mask,
+and takes a row-wise softmax; that `att` produces `y = att @ v`. All three chapter
+04 toy figures therefore show one consistent computation. Coefficients are shown
+to three decimals; sums use full precision.
 The singleton head axis is omitted only in the `v`, `att`, and `y` fixture arrays.
 The UI shows full shapes and fixes the head index to zero.
 
@@ -214,9 +285,10 @@ All arrays remain fixed; interaction chooses which computed output to inspect.
 The initial state and native `details` element work without JavaScript. A small
 Astro script handles selection without new dependencies.
 
-`QueryKeyDotProducts.astro` adds an independent query–key illustration to chapter 04. `src/lib/query-key-vectors.ts` applies two documented linear transformations
-to the weighted-sum example's seeded inputs, then computes every signed dot
-product. Separate `B × T` grids show queries and keys; selecting any cell in either
+`QueryKeyDotProducts.astro` adds the query–key illustration to chapter 04.
+`src/lib/query-key-vectors.ts` re-exports the queries, keys, and dot products
+from `weighted-vectors.ts` (kept in one module to avoid a circular import) and
+adds the display helpers. Separate `B × T` grids show queries and keys; selecting any cell in either
 grid highlights the corresponding sample row in both. The lower `T × T` grid overlays
 `q_t` and `k_j` and shows their raw dot product, before scaling or masking.
 Both samples are rendered statically, and a small script switches the visible
@@ -224,9 +296,27 @@ sample. A component disclosure shows numeric vectors, dot products, and weights.
 The no-JavaScript fallback shows sample zero. `VectorArrow.astro` supports a
 shared extent and an optional dashed second vector for these pair plots.
 
-## Trained tiny GPT (chapters 05–12)
+`ScoresToWeights.astro` shows the toy example's scaled scores, the masked
+scores, and the softmax weights side by side for a selected sample, with a slider
+multiplying the scores by 0.25–8 before softmax (`causalSoftmax()` in
+`src/lib/attention-scaling.ts`). Factor 1 reproduces `att`.
 
-Chapters 05–12 inspect one small model trained with the CPU command from the
+`AttentionScaling.astro` plots `attention-scaling.json`, generated by:
+
+```bash
+lab/nanogpt/.venv/bin/python experiments/nanogpt/attention_scaling.py public/data/nanogpt
+```
+
+Part 1 draws one query and 64 keys with independent standard normal components
+(4,000 trials per `d`, seed 0) and records the score standard deviation, mean
+largest weight, and effective number of positions `exp(entropy)` with and
+without `1/√d`. Part 2 measures the actual scaled scores of the chapter 11 model
+at 0 and 2,000 updates on the 200 fixed validation windows; it does not remove the
+scaling from the trained model, which would not be meaningful.
+
+## Trained tiny GPT (chapters 00–12)
+
+Chapters 05–12 (and parts of 00–04) inspect one small model trained with the CPU command from the
 nanoGPT README (`n_layer = 4`, `n_head = 4`, `n_embd = 128`, `block_size = 64`,
 2,000 iterations). `experiments/nanogpt/tiny_gpt.py` reruns `train.py`'s loop
 with the unchanged pinned `model.py`, the same random-draw order, evaluation,
@@ -263,6 +353,10 @@ $PY training_loop.py $NANOGPT
 $PY tiny_samples.py $NANOGPT --checkpoint $NANOGPT/out-shakespeare-char/ckpt.pt \
   --sample-output /tmp/sample.txt
 $PY tiny_gpt.py $NANOGPT scaling
+$PY character_frequency.py $NANOGPT
+$PY batch_coverage.py $NANOGPT
+$PY trained_embeddings.py $NANOGPT
+$PY attention_scaling.py $NANOGPT
 $PY nanochat_comparison.py ../../public/data/nanochat-master $NANOGPT/model.py
 cd ../..
 npx prettier --write public/site/data/nanogpt/*.json
@@ -285,6 +379,10 @@ and 200 random 64-character validation windows drawn with a separate
 
 | Artifact                    | Chapter | Contents and checks                                                                                                                                      |
 | --------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `character-frequency.json`  | 01      | Character counts per split and uniform / unigram / bigram validation losses                                                                              |
+| `batch-coverage.json`       | 02      | How often each `train.bin` position entered an input during the chapter 11 run; Poisson estimate; rerun checked against the loss history                 |
+| `trained-embeddings.json`   | 03      | Token PCA, cosine arrays, group means, and position similarity at iterations 0 and 2000                                                                  |
+| `attention-scaling.json`    | 04      | Score spread and effective positions with and without `1/√d` (random vectors); actual scaled scores of the chapter 11 model                              |
 | `multi-head-attention.json` | 05      | Attention weights (per-mille) for 4 layers × 4 heads, head statistics, zero-ablation losses; concatenation and per-head `c_proj` sum checks              |
 | `residual-stream.json`      | 06      | Sublayer write norms and cosine to the final stream, LayerNorm example, MLP pre-activation histograms; stream decomposition and position-wise MLP checks |
 | `probabilities.json`        | 07      | Final logits and logit-lens top-5 per stage; weight tying, `logits = h @ wteᵀ`, and one `generate()` step reproduced                                     |
@@ -292,7 +390,7 @@ and 200 random 64-character validation windows drawn with a separate
 | `backpropagation.json`      | 09      | Logit gradient, float64 finite differences, tied-weight gradient split, embedding-gradient norms per loss position                                       |
 | `training-loop.json`        | 10      | Optimizer groups, gradient accumulation equivalence, one AdamW step, clipping statistics; `get_lr()` vs recorded rates                                   |
 | `tiny-training.json`        | 09–11   | Configuration, per-iteration history, evaluations, gradient norms, snapshot hashes                                                                       |
-| `tiny-samples.json`         | 11      | `sample.py`-equivalent text at iterations 0, 50, 100, 250, 500, 1000, 2000                                                                               |
+| `tiny-samples.json`         | 00, 11  | `sample.py`-equivalent text at iterations 0, 50, 100, 250, 500, 1000, 2000                                                                               |
 | `scaling.json`              | 12      | 28 runs (model size, training length, context length, dropout) with `estimate_loss()` curves and a fixed 200-window evaluation per split                 |
 | `nanochat-comparison.json`  | 13      | RoPE example computed with nanochat's own functions (offset-only dependence checked) and parameter counts at matching sizes                              |
 

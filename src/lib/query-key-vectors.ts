@@ -1,32 +1,12 @@
-import { exampleInputs } from './weighted-vectors';
+import { keys, queries } from './weighted-vectors';
 
-// Educational linear transformations of the same seeded inputs as the value example.
-// Rows are output components; columns are input components. Both biases are zero.
-export const queryWeights = [
-  [0.8, 0.3],
-  [-0.2, 0.9],
-];
-export const keyWeights = [
-  [-0.3, 0.8],
-  [0.9, 0.2],
-];
-const transform = (weights: number[][]) =>
-  exampleInputs.map((sample) =>
-    sample.map((vector) =>
-      weights.map((row) =>
-        row.reduce((sum, weight, c) => sum + weight * vector[c], 0),
-      ),
-    ),
-  );
-export const queries = transform(queryWeights);
-export const keys = transform(keyWeights);
-export const dotProducts = queries.map((sample, b) =>
-  sample.map((query) =>
-    keys[b].map((key) =>
-      query.reduce((sum, value, c) => sum + value * key[c], 0),
-    ),
-  ),
-);
+export {
+  dotProducts,
+  keyWeights,
+  keys,
+  queries,
+  queryWeights,
+} from './weighted-vectors';
 export const queryKeyExtent = Math.ceil(
   Math.max(...[queries, keys].flat(3).map(Math.abs)),
 );

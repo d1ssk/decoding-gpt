@@ -16,6 +16,8 @@ experimentId: nanogpt-03-embeddings
 ---
 
 import EmbeddingInspector from '../../../../components/EmbeddingInspector.astro';
+import EmbeddingMap from '../../../../components/EmbeddingMap.astro';
+import PositionSimilarity from '../../../../components/PositionSimilarity.astro';
 
 ## What is an embedding?
 
@@ -292,33 +294,34 @@ During training, the model computes a loss from its next-token predictions and t
 
 For example, when the same `l` appears repeatedly in the input, gradients propagated back from those positions accumulate into the shared `wte.weight[3]`. Position embeddings likewise receive accumulated gradients from input sequences using the same position.
 
-Through repeated updates, token vectors develop structure useful for language prediction.
+Repeated updates also change the size of the vectors. In the [chapter 11](../11-train-a-tiny-gpt/) run, the standard deviation after 2,000 updates was 0.068 for `wte.weight` and 0.032 for `wpe.weight`. The mean norm of a row grew from 0.22 to 0.75 for `wte` and from 0.23 to 0.34 for `wpe`. The subsequent LayerNorm normalizes these values, so their direction matters more to the computation than their size ([chapter 6](../06-mlp-and-residual-stream/)).
 
-### Semantic structure in the vector space
+### Token embeddings after training
 
-In language models trained on sufficient data, regularities in word meaning and usage can emerge as relationships between vectors.
+Let us look at `wte.weight` in the model updated 2,000 times in chapter 11 (`C = 128`). Each of the 65 rows is a vector with 128 components, which cannot be drawn directly. We therefore found the two directions along which the 65 vectors spread the most (the first and second principal components) and placed each character by its projection onto those two directions.
 
-A well-known example from word embeddings is a relationship such as:
+<EmbeddingMap lang="en" />
 
-$$
-\boldsymbol{v}_{\mathrm{prince}}
--
-\boldsymbol{v}_{\mathrm{man}}
-+
-\boldsymbol{v}_{\mathrm{woman}}
-\approx
-\boldsymbol{v}_{\mathrm{princess}}
-$$
+After 0 updates, the first and second principal components explain 4.6% and 4.2% of the variance, and the characters are scattered regardless of their kind. After 2,000 updates, the following structure appears.
 
-This expresses the idea that the relationship between `prince` and `princess` can appear as a vector difference similar to the relationship between `man` and `woman`.
+1. **The first principal component follows character frequency.** It explains 21.8% of the variance, and its correlation with the log of each character's training count is −0.98. Frequent characters such as the space and `e` sit on the left; rare characters such as `$`, `&`, `3`, `Q`, and `Z` sit on the right. [Chapter 1](../01-text-to-tokens/) shows the counts.
+2. **The second principal component separates uppercase letters from punctuation.** Uppercase letters gather at the bottom; `.`, `?`, `!`, `,`, and `;` gather at the top.
+3. **Characters of the same kind point in similar directions.** The characters with the highest cosine similarity to `a` are `i` and `o` (0.52) and `e` (0.48); the closest to `.` are `?` (0.85) and `!` (0.78). The mean cosine similarity is 0.405 among lowercase vowels, 0.109 among consonants, and −0.024 between vowels and consonants. Before training, all three are close to 0.
+4. **The link between uppercase and lowercase forms stays weak.** Pairs such as `a` and `A` have a mean cosine similarity of 0.241, lower than the mean of 0.355 among uppercase letters.
 
-In this way, vector spaces can represent both word similarities and semantic relationships through directions and distances. These relationships are not explicitly taught to the model. As it learns to predict from large amounts of text, regularities in language become reflected in the arrangement of vectors.
+Nothing told the model which characters are vowels or punctuation. Updating the weights to improve next-character prediction made characters that are used similarly point in similar directions.
 
-Such vector arithmetic is particularly associated with word embeddings such as Word2Vec; it is not guaranteed to hold for GPT token embeddings. GPT may split a word into multiple tokens, and its subsequent Transformer blocks also develop representations that depend on context.
+nanoGPT shares the token embedding weight `wte.weight` with the output-side `lm_head.weight`. Each row represents an input character and also computes the score for that character coming next ([chapter 7](../07-hidden-states-to-probabilities/)). This observation alone cannot separate which role produced the arrangement. [Chapter 9](../09-backpropagation/) shows the shared weight receiving gradients from both paths.
 
-This small character-level model cannot directly demonstrate these semantic relationships between words. The underlying idea is shared, however: **a token ID that began as an identifier becomes associated with a vector that reflects linguistic structure through learning**.
+### Position embeddings after training
 
-nanoGPT also shares the token embedding weights `wte.weight` with the output's `lm_head.weight`. These weights therefore receive gradients through both input embedding lookups and output predictions. “From Hidden States to Probabilities” will cover this mechanism in detail.
+We also computed the cosine similarity between the 64 rows of the position embedding `wpe.weight`.
+
+<PositionSimilarity lang="en" />
+
+Before training, the position vectors are nearly unrelated to each other. After 2,000 updates, nearby positions point in similar directions. Adjacent positions have a mean cosine similarity of 0.649; it falls as the position difference grows, crosses 0 around a difference of 27–28, and reaches −0.74 at a difference of 56. The first principal component of the 64 position vectors explains 62.6% of the variance, and its value increases almost monotonically from position 0 to 63.
+
+Each position embedding starts as an independent row, with no ordering between positions given in advance. Training produced vectors that reflect which positions come before and after one another.
 
 ## In the next chapter
 

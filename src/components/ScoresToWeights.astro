@@ -1,0 +1,232 @@
+---
+import { scaledScores } from '../lib/weighted-vectors';
+import {
+  causalSoftmax,
+  scoreFactors,
+  scoresToWeightsUi,
+} from '../lib/attention-scaling';
+import type { Language } from '../lib/site';
+
+interface Props {
+  lang: Language;
+}
+const { lang } = Astro.props;
+const ui = scoresToWeightsUi[lang];
+const initialB = 0;
+const initialFactor = scoreFactors.indexOf(1);
+const scores = scaledScores[initialB];
+const weights = causalSoftmax(scores);
+const stages = [
+  { key: 'scores', title: ui.scores },
+  { key: 'masked', title: ui.masked },
+  { key: 'weights', title: ui.weights },
+];
+const cell = (key: string, t: number, j: number) => {
+  if (key === 'weights') return weights[t][j].toFixed(3);
+  if (key === 'masked' && j > t) return '−∞';
+  return scores[t][j].toFixed(3);
+};
+---
+
+<figure
+  class="scores-to-weights"
+  data-scores-to-weights
+  data-scores={JSON.stringify(scaledScores)}
+  data-lang={lang}
+>
+  <figcaption>{ui.caption}</figcaption>
+  <div class="controls">
+    <fieldset>
+      <legend>{ui.sample}</legend>
+      {[0, 1].map((b) => (
+        <label>
+          <input
+            type="radio"
+            name={`scores-to-weights-b-${lang}`}
+            value={b}
+            checked={b === initialB}
+            disabled
+          />
+          {b}
+        </label>
+      ))}
+    </fieldset>
+    <label class="slider">
+      {ui.factor}
+      <input
+        type="range"
+        min="0"
+        max={scoreFactors.length - 1}
+        step="1"
+        value={initialFactor}
+        data-factor
+        disabled
+      />
+      <output data-factor-value>{ui.factorValue(1)}</output>
+    </label>
+  </div>
+  <div class="stages">
+    {stages.map(({ key, title }) => (
+      <table data-stage={key}>
+        <caption>
+          <code>{title}</code>
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">t \ j</th>
+            {[0, 1, 2].map((j) => (
+              <th scope="col">{j}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {[0, 1, 2].map((t) => (
+            <tr>
+              <th scope="row">{t}</th>
+              {[0, 1, 2].map((j) => (
+                <td
+                  data-cell={`${key}-${t}-${j}`}
+                  class:list={{ future: j > t && key !== 'scores' }}
+                  style={
+                    key === 'weights' ? `--w: ${weights[t][j]}` : undefined
+                  }
+                >
+                  {cell(key, t, j)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    ))}
+  </div>
+  <p class="note">{ui.note}</p>
+</figure>
+
+<script>
+  import {
+    causalSoftmax,
+    scoreFactors,
+    scoresToWeightsUi,
+  } from '../lib/attention-scaling';
+
+  document
+    .querySelectorAll<HTMLElement>('[data-scores-to-weights]')
+    .forEach((root) => {
+      const all = JSON.parse(root.dataset.scores!) as number[][][];
+      const ui = scoresToWeightsUi[root.dataset.lang === 'ja' ? 'ja' : 'en'];
+      const slider = root.querySelector<HTMLInputElement>('[data-factor]')!;
+      let b = 0;
+      const set = (id: string, text: string, weight?: number) => {
+        const element = root.querySelector<HTMLElement>(`[data-cell="${id}"]`)!;
+        element.textContent = text;
+        if (weight !== undefined)
+          element.style.setProperty('--w', String(weight));
+      };
+      const render = () => {
+        const factor = scoreFactors[Number(slider.value)];
+        const scores = all[b].map((row) => row.map((v) => v * factor));
+        const weights = causalSoftmax(all[b], factor);
+        for (let t = 0; t < 3; t++) {
+          for (let j = 0; j < 3; j++) {
+            set(`scores-${t}-${j}`, scores[t][j].toFixed(3));
+            set(`masked-${t}-${j}`, j > t ? '−∞' : scores[t][j].toFixed(3));
+            set(`weights-${t}-${j}`, weights[t][j].toFixed(3), weights[t][j]);
+          }
+        }
+        root.querySelector('[data-factor-value]')!.textContent =
+          ui.factorValue(factor);
+      };
+      root
+        .querySelectorAll<HTMLInputElement>('input[type="radio"]')
+        .forEach((input) => {
+          input.disabled = false;
+          input.addEventListener('change', () => {
+            b = Number(input.value);
+            render();
+          });
+        });
+      slider.disabled = false;
+      slider.addEventListener('input', render);
+    });
+</script>
+
+<style>
+  .scores-to-weights {
+    border-block: 1px solid var(--line-strong);
+    margin: 2rem 0;
+    padding: 1.25rem 0;
+  }
+  figcaption {
+    font-weight: 600;
+    margin-bottom: 1rem;
+  }
+  .controls {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    font-size: 0.85rem;
+    gap: 0.75rem 2rem;
+    margin-bottom: 1rem;
+  }
+  fieldset {
+    border: 0;
+    display: flex;
+    gap: 0.9rem;
+    margin: 0;
+    padding: 0;
+  }
+  legend {
+    float: left;
+    margin-right: 0.6rem;
+  }
+  label {
+    align-items: center;
+    display: inline-flex;
+    gap: 0.3rem;
+  }
+  .slider input {
+    width: 9rem;
+  }
+  output {
+    font-family: var(--font-mono);
+    min-width: 3rem;
+  }
+  .stages {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(12.5rem, 1fr));
+  }
+  table {
+    border-collapse: collapse;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    margin: 0;
+  }
+  caption {
+    font-size: 0.8rem;
+    margin-bottom: 0.4rem;
+    text-align: left;
+  }
+  th,
+  td {
+    border: 1px solid var(--line);
+    padding: 0.2rem 0.35rem;
+    text-align: right;
+    white-space: nowrap;
+  }
+  th {
+    color: var(--ink-muted);
+    font-weight: 400;
+  }
+  td.future {
+    color: var(--ink-muted);
+  }
+  [data-stage='weights'] td {
+    background: rgba(30, 91, 73, calc(var(--w, 0) * 0.55));
+  }
+  .note {
+    color: var(--ink-secondary);
+    font-size: 0.8rem;
+  }
+</style>

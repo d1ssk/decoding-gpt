@@ -12,6 +12,7 @@ import {
   vectorExampleUi,
   subscript,
   formatVector,
+  formatWeight,
 } from '../lib/weighted-vectors';
 import type { Language } from '../lib/site';
 interface Props {
@@ -60,7 +61,7 @@ const colors = [...vectorColors, resultColor];
             <th scope="row">{position}</th>
             {row.map((weight, j) => (
               <td data-att-cell data-t={position} data-j={j}>
-                {weight}
+                {formatWeight(weight)}
               </td>
             ))}
           </tr>
@@ -82,7 +83,7 @@ const colors = [...vectorColors, resultColor];
             {j === 0 ? '' : j === 3 ? '=' : '+'}
           </span>
           <span class="coefficient" data-coefficient={j < 3 ? j : undefined}>
-            {j < 3 ? `${weights[j]} ×` : ''}
+            {j < 3 ? `${formatWeight(weights[j])} ×` : ''}
           </span>
           <VectorArrow
             id={`${prefix}-equation-${j}`}
@@ -125,7 +126,7 @@ const colors = [...vectorColors, resultColor];
               <tr>
                 <th scope="row">{j}</th>
                 <td data-vector-components={j}>{formatVector(vector)}</td>
-                <td data-number-weight={j}>{weights[j]}</td>
+                <td data-number-weight={j}>{formatWeight(weights[j])}</td>
                 <td data-contribution={j}>
                   {formatVector(initial.contributions[j])}
                 </td>
@@ -178,6 +179,7 @@ const colors = [...vectorColors, resultColor];
     weightedVectors,
     subscript,
     formatVector,
+    formatWeight,
     vectorPoint,
     vectorExampleUi,
   } from '../lib/weighted-vectors';
@@ -241,7 +243,7 @@ const colors = [...vectorColors, resultColor];
         root
           .querySelectorAll<HTMLElement>('[data-att-cell]')
           .forEach((cell) => {
-            cell.textContent = String(
+            cell.textContent = formatWeight(
               exampleAttention[b][Number(cell.dataset.t)][
                 Number(cell.dataset.j)
               ],
@@ -256,8 +258,8 @@ const colors = [...vectorColors, resultColor];
           if (j < 3) {
             const weight = weights[j];
             term.classList.toggle('dimmed', weight === 0);
-            setText(`[data-coefficient="${j}"]`, `${weight} ×`);
-            setText(`[data-number-weight="${j}"]`, String(weight));
+            setText(`[data-coefficient="${j}"]`, `${formatWeight(weight)} ×`);
+            setText(`[data-number-weight="${j}"]`, formatWeight(weight));
             setText(`[data-vector-components="${j}"]`, formatVector(vector));
             setText(
               `[data-contribution="${j}"]`,

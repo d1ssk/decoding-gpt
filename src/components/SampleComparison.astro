@@ -1,0 +1,71 @@
+---
+import data from '../../public/site/data/nanogpt/tiny-samples.json';
+import { sampleComparisonUi } from '../lib/overview';
+import type { Language } from '../lib/site';
+
+interface Props {
+  lang: Language;
+  iterations?: number[];
+  length?: number;
+}
+const { lang, iterations = [0, 2000], length = 180 } = Astro.props;
+const ui = sampleComparisonUi[lang];
+const samples = iterations.map((iter) =>
+  data.samples.find((sample) => sample.iter === iter)!,
+);
+---
+
+<figure class="sample-comparison">
+  <figcaption>{ui.caption}</figcaption>
+  <div class="samples">
+    {samples.map((sample) => (
+      <section>
+        <p class="stage">{ui.stage(sample.iter)}</p>
+        <p class="loss">
+          {ui.valLoss}: <code>{sample.val?.toFixed(3)}</code>
+        </p>
+        <pre tabindex="0">{sample.text.slice(1, length + 1)}</pre>
+      </section>
+    ))}
+  </div>
+  <p class="note">{ui.note}</p>
+</figure>
+
+<style>
+  .sample-comparison {
+    border-block: 1px solid var(--line-strong);
+    margin: 2rem 0;
+    padding: 1.25rem 0;
+  }
+  figcaption {
+    font-weight: 600;
+    margin-bottom: 1rem;
+  }
+  .samples {
+    display: grid;
+    gap: 1rem 1.5rem;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  }
+  .stage {
+    font-size: 0.9rem;
+    margin: 0;
+  }
+  .loss {
+    color: var(--ink-secondary);
+    font-size: 0.8rem;
+    margin: 0.2rem 0 0.5rem;
+  }
+  pre {
+    background: var(--paper-subtle);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    margin: 0;
+    padding: 0.75rem;
+    white-space: pre-wrap;
+  }
+  .note {
+    color: var(--ink-secondary);
+    font-size: 0.8rem;
+  }
+</style>

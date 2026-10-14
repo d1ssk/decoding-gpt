@@ -152,7 +152,8 @@ def trace(model, idx, ablate=None):
     return out
 
 
-def train(nanogpt_dir, cfg, snapshot_iters=(), snapshot_dir=None, grad_detail_iters=()):
+def train(nanogpt_dir, cfg, snapshot_iters=(), snapshot_dir=None, grad_detail_iters=(),
+          on_batch=None):
     module = load_module(nanogpt_dir)
     data_dir = nanogpt_dir / "data/shakespeare_char"
     with open(data_dir / "meta.pkl", "rb") as f:
@@ -163,6 +164,9 @@ def train(nanogpt_dir, cfg, snapshot_iters=(), snapshot_dir=None, grad_detail_it
     def get_batch(split):
         data = np.memmap(data_dir / f"{split}.bin", dtype=np.uint16, mode="r")
         ix = torch.randint(len(data) - T, (B,))
+        if on_batch is not None:
+            # Observation only: records start positions without drawing random numbers.
+            on_batch(split, ix.tolist(), model.training)
         x = torch.stack([torch.from_numpy((data[i:i + T]).astype(np.int64)) for i in ix])
         y = torch.stack([torch.from_numpy((data[i + 1:i + 1 + T]).astype(np.int64)) for i in ix])
         return x, y
