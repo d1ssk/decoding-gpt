@@ -22,7 +22,17 @@ export const cosineColor = (value: number) => {
 
 export const embeddingMapUi = {
   ja: {
-    caption: 'トークン埋め込みの 65 行を 2 次元に射影した配置',
+    caption: 'トークン埋め込みの 65 行の主成分による配置',
+    dimensions: '表示',
+    twoD: '2 次元',
+    threeD: '3 次元',
+    zoom: '拡大・縮小',
+    reset: '視点をリセット',
+    coordinates: '主成分の座標（PC1 / PC2 / PC3）',
+    rotation:
+      'ドラッグで回転、スクロールやピンチで拡大・縮小できます。図にフォーカスすると矢印キーで回転、＋ / − キーで拡大・縮小できます。',
+    axes3: (a: number, b: number, c: number, total: number) =>
+      `PC1・PC2・PC3 の寄与率は ${a}%・${b}%・${c}%（合計 ${total.toFixed(1)}%）。3 軸は共通の縮尺です。`,
     stage: '重み',
     stageLabel: (iter: number) => `更新 ${iter.toLocaleString('en-US')} 回後`,
     classes: {
@@ -33,7 +43,7 @@ export const embeddingMapUi = {
       space: '空白・改行',
     } as Record<string, string>,
     instruction:
-      '下の文字を選ぶと、その文字の埋め込みとコサイン類似度が高い文字を表示します。',
+      '下の文字を選ぶと、その文字の埋め込みとコサイン類似度が高い文字を表示します。コサイン類似度は元の 128 成分から計算しています。',
     neighbors: 'コサイン類似度の上位 5 文字',
     selected: '選択した文字',
     axes: (pc1: number, pc2: number) =>
@@ -43,7 +53,17 @@ export const embeddingMapUi = {
       'JavaScript が無効な場合は、更新 2,000 回後の配置と、e の近傍を表示します。',
   },
   en: {
-    caption: 'The 65 rows of the token embedding projected onto two dimensions',
+    caption: 'Principal-component view of the 65 token embedding rows',
+    dimensions: 'View',
+    twoD: '2D',
+    threeD: '3D',
+    zoom: 'Zoom',
+    reset: 'Reset view',
+    coordinates: 'Principal-component coordinates (PC1 / PC2 / PC3)',
+    rotation:
+      'Drag to rotate; scroll or pinch to zoom. With the plot focused, use arrow keys to rotate and + / − to zoom.',
+    axes3: (a: number, b: number, c: number, total: number) =>
+      `PC1, PC2, and PC3 explain ${a}%, ${b}%, and ${c}% of variance (${total.toFixed(1)}% combined). All three axes share one scale.`,
     stage: 'Weights',
     stageLabel: (iter: number) =>
       `After ${iter.toLocaleString('en-US')} updates`,
@@ -55,7 +75,7 @@ export const embeddingMapUi = {
       space: 'Space and newline',
     } as Record<string, string>,
     instruction:
-      'Select a character below to list the characters whose embeddings have the highest cosine similarity with it.',
+      'Select a character below to list the characters whose embeddings have the highest cosine similarity with it. Cosine similarity is computed from the original 128 components.',
     neighbors: 'Top 5 by cosine similarity',
     selected: 'Selected character',
     axes: (pc1: number, pc2: number) =>

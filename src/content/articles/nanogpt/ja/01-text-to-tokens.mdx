@@ -81,7 +81,7 @@ assert decode(ids) == sample
 
 ## Shakespeare の語彙で変換する
 
-次の入力欄では、`data/shakespeare_char/prepare.py` と同じ手順で Tiny Shakespeare の全文から作った 65 文字の語彙を使います。入力すると、各文字が学習データと同じ ID に変換されます。大文字と小文字には、それぞれ別の ID が付き、空白や改行にも ID が付きます。初期表示の文字列は検証データ `val.bin` の先頭近くにある一節で、第 5 章以降の図でも同じ箇所を使います。
+次の入力欄では、`data/shakespeare_char/prepare.py` と同じ手順で Tiny Shakespeare の全文から作った 65 文字の語彙を使います。入力すると、各文字が学習データと同じ ID に変換されます。大文字と小文字には、それぞれ別の ID が付き、空白や改行にも ID が付きます。初期表示の `To be, or not to be?` では、繰り返し現れる文字に同じ ID が付くことを確認できます。
 
 <TokenInspector lang="ja" />
 

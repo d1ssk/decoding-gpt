@@ -22,29 +22,35 @@ experimentId: nanogpt-13-from-nanogpt-to-nanochat
 ---
 
 import RotaryPositions from '../../../../components/RotaryPositions.astro';
+import ActivationComparison from '../../../../components/ActivationComparison.astro';
 
 ## nanoGPT が扱った範囲
 
-このシリーズでは、nanoGPT（コミット `3adf61e`）で、テキストを token ID にし、GPT で次のトークンの確率を計算し、cross entropy を AdamW で小さくする事前学習（pretraining）の核を読んできました。学習したモデルは、与えられた文章の続きを生成できます。
+このシリーズでは、nanoGPT で、テキストを token ID にし、GPT で次のトークンの確率を計算し、cross entropy を AdamW で小さくする事前学習（pretraining）の核を読んできました。学習したモデルは、与えられた文章の続きを生成できます。
 
-ChatGPT のように質問に答えるモデルを作るには、この核に加えて、大規模なデータとトークナイザ、評価、会話形式での追加学習、効率のよい推論が必要です。同じ作者による [nanochat](https://github.com/karpathy/nanochat/tree/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd) は、それらを 1 つのリポジトリにまとめた実装です。この章では、コミット `92d63d4`（2026 年 7 月 3 日）の nanochat を nanoGPT と比べ、何が同じで何が変わるかを確かめます。
+ChatGPT のように質問に答えるモデルを作るには、この核に加えて、大規模なデータとトークナイザ、評価、会話形式での追加学習、効率のよい推論が必要です。nanoGPT と同じ作者による [nanochat](https://github.com/karpathy/nanochat/tree/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd) は、それらを 1 つのリポジトリにまとめた実装です。この章では、コミット `92d63d4`（2026 年 7 月 3 日）の nanochat を nanoGPT と比べ、何が同じで何が変わるかを確かめます。
 
 ## パイプライン全体
 
-nanochat の [`runs/speedrun.sh`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/runs/speedrun.sh) は、8 GPU の計算機で、GPT-2 と同程度の性能のモデルを学習し、対話できるようにするまでの手順をまとめたスクリプトです。環境構築を除くと、主な手順は次のとおりです。
+nanochat の [`runs/speedrun.sh`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/runs/speedrun.sh) は、8 GPU の計算機で、GPT-2 と同程度の性能のモデルを学習し、対話できるようにするまでの手順をまとめたスクリプトです。環境構築を除く主な手順を抜粋し、説明用コメントを付けています。
 
 ```bash
-python -m nanochat.dataset -n 8
-python -m nanochat.dataset -n 170 &
-python -m scripts.tok_train
-python -m scripts.tok_eval
-torchrun --standalone --nproc_per_node=8 -m scripts.base_train -- --depth=24 --target-param-data-ratio=8 --device-batch-size=16 --fp8 --run=$WANDB_RUN
-torchrun --standalone --nproc_per_node=8 -m scripts.base_eval -- --device-batch-size=16
-torchrun --standalone --nproc_per_node=8 -m scripts.chat_sft -- --run=$WANDB_RUN
-torchrun --standalone --nproc_per_node=8 -m scripts.chat_eval -- -i sft
+python -m nanochat.dataset -n 8       # トークナイザ用のデータを 8 分割分取得
+python -m nanochat.dataset -n 170 &   # 事前学習用データを取得（& はバックグラウンド実行）
+DATASET_DOWNLOAD_PID=$!              # 直前に起動した処理の ID を保存
+python -m scripts.tok_train          # 文字列をトークンに分ける規則を学習
+python -m scripts.tok_eval           # トークナイザの圧縮率などを評価
+wait "$DATASET_DOWNLOAD_PID"        # データの取得完了を待ってから事前学習へ
+
+torchrun --standalone --nproc_per_node=8 -m scripts.base_train --  --depth=24 --target-param-data-ratio=8 --device-batch-size=16  --fp8 --run=$WANDB_RUN  # 24 層のモデルで次のトークンの予測を学習
+torchrun --standalone --nproc_per_node=8 -m scripts.base_eval --  --device-batch-size=16  # 事前学習後の損失やベンチマークを評価
+torchrun --standalone --nproc_per_node=8 -m scripts.chat_sft --  --run=$WANDB_RUN  # 会話データで教師あり追加学習（SFT）
+torchrun --standalone --nproc_per_node=8 -m scripts.chat_eval --  -i sft  # SFT 後のモデルを評価
 ```
 
-データのダウンロード、トークナイザの学習、事前学習、評価、会話データによる追加学習（SFT）、その評価が順に並んでいます。nanoGPT の各部分は、nanochat では次のファイルに対応します。
+`python -m scripts.tok_train` は `scripts/tok_train.py` をモジュールとして実行します。`torchrun --standalone --nproc_per_node=8` は 1 台の計算機で 8 プロセス（各 GPU に 1 つ）を起動し、`-m` で指定したモジュールを並列に実行します。`$WANDB_RUN` は学習ログの記録名を入れた変数です。
+
+nanoGPT の各部分は、nanochat では次のファイルに対応します。
 
 | 役割             | nanoGPT                                    | nanochat                                                                 |
 | ---------------- | ------------------------------------------ | ------------------------------------------------------------------------ |
@@ -57,7 +63,7 @@ torchrun --standalone --nproc_per_node=8 -m scripts.chat_eval -- -i sft
 | 追加学習         | `config/finetune_shakespeare.py`           | `scripts/chat_sft.py`、`scripts/chat_rl.py`                              |
 | 生成             | `GPT.generate()`、`sample.py`              | `nanochat/engine.py`、`scripts/chat_cli.py`                              |
 
-## モデル：同じ骨組みと変わった部品
+## モデル構造の共通点と変更点
 
 [`nanochat/gpt.py`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py#L1-L13) の冒頭には、nanoGPT からの主な変更点が列挙されています。
 
@@ -77,7 +83,7 @@ Notable features:
 """
 ```
 
-部品は変わっていますが、[`Block.forward()`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py#L144-L153) の骨組みは nanoGPT と同じです。正規化した入力を attention と MLP に渡し、その出力を残差ストリームに足します（第 6 章）。
+[`Block.forward()`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py#L144-L153) の基本構造は nanoGPT と同じです。正規化した入力を attention と MLP に渡し、その出力を残差ストリームに足します（第 6 章）。
 
 ```python
 def forward(self, x, ve, cos_sin, window_size, kv_cache):
@@ -86,7 +92,7 @@ def forward(self, x, ve, cos_sin, window_size, kv_cache):
     return x
 ```
 
-以下、変わった部品を順に見ていきます。
+以下、主な変更点を順に見ていきます。
 
 ### 位置の表し方：RoPE
 
@@ -116,9 +122,11 @@ def apply_rotary_emb(x, cos, sin):
 
 位置 $m$ の組 $i$ を回転させる角度は $m\,\omega_i$ で、周波数は [`_precompute_rotary_embeddings()`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py#L270-L285) で $\omega_i = 100000^{-2i/d}$ と決まります。組ごとに回転の速さが異なり、$i = 0$ は 1 位置あたり 1 ラジアン、$i$ が大きいほどゆっくり回ります。
 
-回転の重要な性質は、**回転後の内積が相対位置 $m - n$ だけで決まる**ことです。位置 $m$ の query を $-m\omega$、位置 $n$ の key を $-n\omega$ だけ回転させると、2 つのベクトルの間の角度は $(m-n)\omega$ だけ変わります。内積は 2 つのベクトルの長さと間の角度だけで決まるので、スコアは絶対位置によらず、相対位置に依存します。
+回転後の内積は、回転前の query・key の値と、相対位置 $m - n$ によって決まります。重要なのは、**同じ query・key なら、両方の位置を同じだけずらしても内積が変わらない**ことです。各組で query を $-m\omega_i$、key を $-n\omega_i$ だけ回転させるため、位置を同じだけずらすと、両方に同じ角度の回転が加わります。すると、ベクトルの長さと互いの角度が保たれ、内積も変わりません。
 
-次の図は、nanochat の関数そのもので計算した説明用の例です。`m` と `n` を動かすと、組 0 と組 1 の平面で、回転後の query と key、その内積が変わります。下の表は、すべての $(m, n)$ の組み合わせの内積です。
+これにより、「直前のトークンを参照する」といった規則を、文章中の位置が変わっても利用しやすくなります。どの内容と距離を重視するかは、query と key を作る重みの学習で決まります。
+
+次の図は、回転前の query と key を固定し、nanochat の関数そのもので計算した説明用の例です。`m` と `n` を動かすと、組 0 と組 1 の平面で、位置による回転と内積の変化を確かめられます。下の表は、すべての $(m, n)$ の組み合わせの内積です。
 
 <RotaryPositions lang="ja" />
 
@@ -145,6 +153,8 @@ $$
 
 [`MLP`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py#L131-L141) の構造（`C → 4C → C`）は nanoGPT と同じで、活性化関数が GELU から ReLU の 2 乗に変わっています。
 
+<ActivationComparison lang="ja" />
+
 ```python
 def forward(self, x):
     x = self.c_fc(x)
@@ -153,11 +163,13 @@ def forward(self, x):
     return x
 ```
 
-負の入力では出力が厳密に 0 になります。第 6 章では、GELU の場合も中間層の多くの成分が 0 付近になることを見ました。
+ReLU² は負の入力で 0、正の入力で $x^2$ を返します。GELU は負の入力で小さな負の値を取り、正の入力が大きくなると出力が $x$ に近づきます。「0 付近」に切り替えると、負の側の違いを確認できます。
 
 ### 埋め込みと出力層
 
-nanochat は `wte` と `lm_head` の重みを共有しません（第 7 章との違い）。`lm_head` の重みは標準偏差 0.001 で初期化され、学習前の logits はほぼ 0、つまり予測はほぼ一様分布になります。さらに、[`forward()`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py#L510-L515) は logits を $15\tanh(z/15)$ で $\pm 15$ の範囲に滑らかに制限します。
+学習前の予測がほぼ一様分布になる点は、第 8 章で見た nanoGPT と共通です。違いは重みの共有と初期化にあります。nanoGPT は `wte` と `lm_head` の重みを共有し、標準偏差 0.02 で初期化します。nanochat は両者を分け、`lm_head` を標準偏差 0.001 で初期化します。
+
+さらに、[`forward()`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py#L510-L515) は logits を $15\tanh(z/15)$ で $\pm 15$ の範囲に滑らかに制限します。
 
 ```python
 softcap = 15 # smoothly cap the logits to the range [-softcap, softcap]
@@ -219,7 +231,7 @@ SPECIAL_TOKENS = [
 
 nanoGPT はすべての重みを AdamW で更新しました（第 10 章）。nanochat の [`setup_optimizer()`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py#L419-L457) は、パラメータを役割ごとに分け、異なる更新則と学習率を割り当てます。
 
-- **block 内の 2 次元の重み**：Muon。勾配の移動平均を、直交化に近い変換で整えてから更新に使う optimizer です。
+- **block 内の 2 次元の重み**：Muon。過去の勾配を反映した更新用の 2 次元配列に、方向ごとの強さの偏りを抑える「直交化」の処理を加えます。ここでいう直交化は、行（縦長の配列なら列）のベクトルを、互いに直角で長さが 1 の状態にそろえることです。実装では、少数回の反復計算でこの状態に近づけます。
 - **埋め込み、`lm_head`、スカラー**：AdamW。グループごとに学習率と $\beta$ を変えています。
 
 ### 規模を 1 つの値で決める
@@ -234,7 +246,9 @@ nanochat は、検証損失を **bits per byte**（bpb）で表します。ト�
 
 ### 会話をトークン列にして、応答だけを学習する
 
-SFT では、会話を [`render_conversation()`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/tokenizer.py#L140-L224) で 1 本のトークン列に変換します。同時に、各トークンを学習の対象にするかどうかの mask を作ります。次の表は、ユーザーの質問 1 つとアシスタントの応答 1 つからなる会話の概念図です（実際のトークン分割は省略しています）。
+SFT は **Supervised Fine-Tuning（教師あり追加学習）** の略です。ここでは、事前学習済みのモデルに、質問と望ましい応答の例を使って返答の仕方を学ばせます。
+
+まず、会話を [`render_conversation()`](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/tokenizer.py#L140-L224) で 1 本のトークン列に変換します。同時に、各トークンを学習の対象にするかどうかの mask を作ります。次の表は、ユーザーの質問 1 つとアシスタントの応答 1 つからなる会話の概念図です（実際のトークン分割は省略しています）。
 
 | 部分                    | 例                        | mask |
 | ----------------------- | ------------------------- | ---: |
@@ -270,9 +284,17 @@ ids = torch.tensor(token_column, dtype=torch.long, device=device).unsqueeze(1)
 logits = self.model.forward(ids, kv_cache=kv_cache_decode)[:, -1, :]  # (B, vocab_size)
 ```
 
-RoPE は位置を回転角で表すので、cache を使うときは、新しいトークンの位置を cache の長さから求めて回転させます（`T0 = kv_cache.get_pos()`）。
+1 トークンだけを入力するときも、RoPE には文章全体での位置を使います。例えば、cache に 5 トークン分（位置 0〜4）の key と value が保存されていれば、次のトークンの位置は 5 です。`kv_cache.get_pos()` はこの保存済みのトークン数を返し、その位置に対応する角度で新しい query と key を回転させます。これにより、保存済みの key との内積にも正しい相対位置が反映されます。
 
-`Engine.generate()` は、`<|python_start|>` と `<|python_end|>` の間に生成された式を計算機能で評価し、その結果を `<|output_start|>`、`<|output_end|>` で囲んでトークン列に挿入する処理（tool use）も扱います。この部分は SFT の mask が 0 で、モデルが予測する対象ではありません。
+### 計算機能を呼び出す（tool use）
+
+**tool use** は、モデルが生成の途中で外部の機能を呼び出し、その結果を使って続きを生成する仕組みです。`Engine.generate()` の計算機能なら、例えば次のように進みます。
+
+1. モデルが `<|python_start|>2 + 3<|python_end|>` を生成し、計算を依頼します。
+2. `Engine.generate()` が式を計算し、`<|output_start|>5<|output_end|>` をトークン列に挿入します。
+3. モデルがその結果を読み、「答えは 5 です」といった続きを生成します。
+
+SFT では、計算式と結果を使った返答を学習します。計算機能が返す部分（上の 2）は、区切りのトークンも含めて mask を 0 にし、予測の誤差を損失に含めません。この部分も入力としては読み込むので、結果を踏まえた返答を学べます。
 
 ## nanoGPT シリーズのまとめ
 
@@ -283,4 +305,4 @@ RoPE は位置を回転角で表すので、cache を使うときは、新しい
 - 語彙のスコアから確率と cross entropy を計算し、誤差逆伝播で勾配を求め、optimizer で更新する（第 7〜10 章）。
 - 損失の推移と生成結果、規模を変えた実験で、学習を評価する（第 11・12 章）。
 
-nanochat では、位置の表し方、正規化、活性化関数、optimizer などの部品が新しくなり、トークナイザの学習、会話形式の追加学習、評価、KV cache を使う推論が加わります。次の nanochat シリーズでは、これらを順に読んでいく予定です。
+nanochat では、位置の表し方、正規化、活性化関数、optimizer などの構成要素が変わり、トークナイザの学習、会話形式の追加学習、評価、KV cache を使う推論が加わります。次の nanochat シリーズでは、これらを順に読んでいく予定です。

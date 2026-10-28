@@ -20,7 +20,7 @@ import NextTokenExplorer from '../../../../components/NextTokenExplorer.astro';
 
 ## block の出力から語彙のスコアへ
 
-すべての Transformer block を通った後も、残差ストリームは形状 `[B, T, C]` の配列です。各位置のベクトルは、その位置までの文脈から集めた情報を含んでいますが、まだ「次にどのトークンが来るか」の形にはなっていません。この章では、このベクトルを語彙のトークンごとのスコアに変え、確率と生成につなげます。
+すべての Transformer block を通った後も、残差ストリームは形状 `[B, T, C]` の配列です。各位置のベクトルは、その位置までの文脈から集めた情報を含んでいますが、まだ「次にどのトークンが来るか」の形にはなっていません。この章では、このベクトルを語彙のトークンごとのスコアに変えるところを見て、確率と生成につなげます。
 
 [`GPT.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L170-L193) の後半は次のとおりです。
 
@@ -41,7 +41,11 @@ else:
 
 最後の block の後、`ln_f` で各位置のベクトルを正規化します。前章で見た LayerNorm と同じ処理です。正規化したベクトルを、ここでは**隠れ状態**と呼び、$\boldsymbol{h}_{b,t}$ と書きます。
 
-続く `lm_head` は、`GPT.__init__()` で次のように定義された線形変換です。
+ここで出てくる、`targets` は **各位置で予測すべき次のトークンの ID** を並べた、形状 `[B, T]` の配列です。[第 2 章](../02-context-and-training-examples/)で `get_batch()` から受け取った正解 `Y` に当たります。
+
+学習・検証では `model(X, Y)` として正解を渡し、予測との比較から損失を求めます。一方、生成時は `model(idx)` と入力だけを渡すため、`targets` は既定値の `None` になり、上のコードの `else` 側で logits を計算します。
+
+`lm_head` は、`GPT.__init__()` で次のように定義された線形変換です。
 
 ```python
 self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
@@ -98,34 +102,55 @@ $$
 
 `targets` を渡さずに `forward()` を呼ぶと、`lm_head` を最後の位置にだけ適用します。生成で必要なのは、入力の最後に続くトークンの分布だけだからです。`x[:, [-1], :]` とリストで添字を渡すことで、位置の軸を残して形状 `[B, 1, V]` の logits を返します。
 
-[`GPT.generate()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L305-L330) は、この logits を使って 1 トークンずつ生成します（コメントを省略しています）。
+以下に示す [`GPT.generate()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L305-L330) は、この logits を使って 1 トークンずつ生成します。引数 `idx` は、入力のトークン ID を並べた形状 `[B, T]` の配列です。`B` は同時に扱う文章の数、`T` はトークン数を表します。
 
 ```python
-for _ in range(max_new_tokens):
-    idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
-    logits, _ = self(idx_cond)
-    logits = logits[:, -1, :] / temperature
-    if top_k is not None:
-        v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-        logits[logits < v[:, [-1]]] = -float('Inf')
-    probs = F.softmax(logits, dim=-1)
-    idx_next = torch.multinomial(probs, num_samples=1)
-    idx = torch.cat((idx, idx_next), dim=1)
+@torch.no_grad()
+def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+    """
+    Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
+    the sequence max_new_tokens times, feeding the predictions back into the model each time.
+    Most likely you'll want to make sure to be in model.eval() mode of operation for this.
+    """
+    for _ in range(max_new_tokens):
+        # if the sequence context is growing too long we must crop it at block_size
+        idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+        # forward the model to get the logits for the index in the sequence
+        logits, _ = self(idx_cond)
+        # pluck the logits at the final step and scale by desired temperature
+        logits = logits[:, -1, :] / temperature
+        # optionally crop the logits to only the top k options
+        if top_k is not None:
+            v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+            logits[logits < v[:, [-1]]] = -float('Inf')
+        # apply softmax to convert logits to (normalized) probabilities
+        probs = F.softmax(logits, dim=-1)
+        # sample from the distribution
+        idx_next = torch.multinomial(probs, num_samples=1)
+        # append sampled index to the running sequence and continue
+        idx = torch.cat((idx, idx_next), dim=1)
+
+    return idx
 ```
 
-1. 入力が `block_size` より長ければ、末尾の `block_size` トークンだけを残します。位置埋め込みが `block_size` 行しかないためです。
-2. 最後の位置の logits を `temperature` で割ります。
-3. `top_k` が指定されていれば、上位 `k` 個以外の logits を `−∞` にします。
-4. softmax で確率にし、`torch.multinomial()` でその確率に従って 1 つのトークンを選びます。
-5. 選んだトークンを入力の末尾に追加し、繰り返します。
+1. **予測に使う範囲を決めます。** `idx` は、最初の入力と、これまでに生成したトークンをすべて保持しています。その長さが `block_size` を超えたら、末尾の `block_size` トークンを取り出して `idx_cond` としてモデルに渡します。たとえば `block_size = 8` なら、直近の 8 トークンを使います。位置埋め込みには `block_size` 個の位置が用意されており、これが一度に入力できる長さの上限です。
+2. **次のトークンのスコアを計算し、選ばれやすさを調整します。** `self(idx_cond)` の `self` は GPT モデル自身です。[`class GPT(nn.Module)`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L118) で PyTorch の `nn.Module` を継承しているため、モデルを関数のように呼ぶと、`nn.Module` の呼び出し処理を通じて `forward()` が実行されます（[PyTorch の説明](https://docs.pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.forward)）。
+
+   [`forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L170-L193) が返す最後の位置の logits は、次のトークン候補ごとのスコアです。これを `temperature` で割ります。たとえば `0.5` で割るとスコアの差が 2 倍になり、高いスコアの候補に確率が集まります。`2.0` で割ると差が半分になり、低いスコアの候補も選ばれやすくなります。
+
+3. **選ぶ候補を絞ります。** `top_k = 3` なら、スコアが上位 3 個に入るトークンを候補に残します。それより低いスコアを `−∞` にすると、次の softmax で確率が 0 になります。コードでは 3 番目のスコアを境界にするので、同点の候補も残ります。`top_k` が未指定なら、この処理を省きます。
+4. **確率に従って 1 トークンを抽選します。** softmax でスコアを合計 1 の確率に変え、`torch.multinomial()` で 1 つ選びます。たとえば候補の確率が `60%`、`30%`、`10%` なら、それぞれその確率で選ばれます。同じ入力でも、抽選の結果によって続きが変わります。
+5. **選んだトークンを加えて、次の予測に進みます。** 選んだ `idx_next` を `idx` の末尾に追加します。次の周回では、そのトークンも含めた末尾の範囲を使って、さらに次のトークンを予測します。これを `max_new_tokens` 回繰り返します。
 
 **temperature** $\tau$ で割ると、確率は $\exp(z_v/\tau)$ に比例します。$\tau < 1$ では大きな logits の差が強調されて分布が鋭くなり、$\tau > 1$ では平らになります。$\tau$ を 0 に近づけると、最大の logits を持つトークンだけが選ばれるようになります。
+
+「温度」という名前は、物理の[ボルツマン分布](https://web.stanford.edu/~peastman/statmech/statisticaldescription.html)との対応から来ています。物理では、エネルギー $E_v$ の状態の確率を $p_v = \exp(-E_v/(k_B T))/Z$ と表し、確率の合計を 1 にする分母 $Z$ を**分配関数**と呼びます（$k_B$ はボルツマン定数）。$E_v = -z_v$、$k_B T = \tau$ と対応させると、softmax と同じ形になり、その分母 $\sum_u \exp(z_u/\tau)$ が分配関数に当たります。温度が低いほど低エネルギー、つまり高いスコアの候補に確率が集まり、温度が高いほど幅広い候補が選ばれます。
 
 **top-k** は、確率の低い候補を除外します。除外したトークンの logits は `−∞` なので、softmax 後の確率は 0 です。[`sample.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/sample.py#L17-L18) の既定値は `temperature = 0.8`、`top_k = 200` です。文字単位の語彙は 65 種類なので、`min(top_k, V)` により、この設定では候補を除外しません。
 
 ## 学習済みモデルで分布を操作する
 
-次の図は、第 11 章で学習したモデルが、検証データの 64 文字の各位置で計算した logits を使っています。文字を選ぶと、その位置までを入力として予測した次の文字の確率を、上位 12 候補について表示します。枠の付いた文字が実際の次の文字（正解）です。temperature と top-k のスライダーを動かすと、ブラウザで `generate()` と同じ手順の計算をやり直します。
+次の図では、第 11 章で学習したモデルが、検証データの 64 文字の各位置で計算した logits を使っています。文字を選ぶと、その位置までを入力として予測した次の文字の確率を、上位 12 候補について表示します。枠の付いた文字が実際の次の文字（正解）です。temperature と top-k のスライダーを動かすと、ブラウザで `generate()` と同じ手順の計算をやり直します。
 
 <NextTokenExplorer lang="ja" />
 
@@ -197,6 +222,8 @@ True
 
 ## 次の章へ
 
-最後の LayerNorm で正規化した隠れ状態と、埋め込みと共有する重みの各行との内積が、語彙のスコア logits になります。softmax で確率にし、生成では temperature と top-k で分布を調整してから 1 トークンを選びます。学習済みモデルでは、block を通るごとに、ストリームの読み出し結果が入力の文字から次の文字の予測へと移っていきました。
+この章では、Transformer が作った隠れ状態から、次のトークンを選ぶまでを追いました。最後の LayerNorm と `lm_head` が隠れ状態を語彙ごとのスコア logits に変え、softmax が確率に変えます。`lm_head` は入力の埋め込みと重みを共有しており、同じ重みが入力を表す役割と出力を読み出す役割を担っていました。
+
+生成では、最後の位置の logits を temperature と top-k で調整し、softmax で得た確率に従って 1 トークンを選びます。
 
 学習では、この確率分布を正解のトークンと比べ、どれだけ外れているかを 1 つの数値にします。次章では、その損失 cross entropy を扱います。

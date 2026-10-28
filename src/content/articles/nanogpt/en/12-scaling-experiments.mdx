@@ -48,12 +48,12 @@ The $6N$ per token reflects that each multiply-add with a weight costs 2 FLOPs (
 
 Starting from chapter 11's settings (the README's CPU settings), we varied four kinds of conditions. Every run used the same rerun script as chapter 11, which follows the `train.py` procedure, once each with seed 1337.
 
-| Condition               | Settings varied                                                             | Runs |
-| ----------------------- | --------------------------------------------------------------------------- | ---: |
-| Model size              | `n_embd` ∈ {32, 64, 128, 256} × `n_layer` ∈ {1, 2, 4, 8} (subset)           |   14 |
-| Training length         | `max_iters` = `lr_decay_iters` ∈ {250, 500, 1000, 2000, 4000, 8000}         |    6 |
-| Context length          | `block_size` ∈ {8, 16, 32, 64, 128, 256}, `batch_size` = 768 / `block_size` |    6 |
-| Overfitting and dropout | `n_layer` = 6, `n_embd` = 256, 6,000 updates, `dropout` ∈ {0, 0.2}          |    2 |
+| Condition               | Settings varied                                                                       | Runs |
+| ----------------------- | ------------------------------------------------------------------------------------- | ---: |
+| Model size              | Selected combinations of `n_embd`: 32, 64, 128, 256 and `n_layer`: 1, 2, 4, 8         |   14 |
+| Training length         | `max_iters` and `lr_decay_iters` both set to one of: 250, 500, 1000, 2000, 4000, 8000 |    6 |
+| Context length          | `block_size`: 8, 16, 32, 64, 128, 256; `batch_size` = 768 / `block_size`              |    6 |
+| Overfitting and dropout | `n_layer` = 6, `n_embd` = 256, 6,000 updates, `dropout`: 0 or 0.2                     |    2 |
 
 The number of components per head was fixed at 32, with `n_head = n_embd / 32`. All other settings, including the learning rate, matched chapter 11.
 
@@ -100,7 +100,7 @@ Keeping chapter 11's model size, we varied the number of updates. Each learning-
 |       4,000 |            3.07M |                       3.1 |    1.538 |      1.732 | 0.194 |
 |       8,000 |            6.14M |                       6.1 |    1.399 |      1.615 | 0.216 |
 
-Each doubling of updates lowered the validation loss by 0.11–0.22. Going from 2,000 to 8,000 updates lowered it from `1.910` to `1.615` with 3.2 × 10¹³ FLOPs. Making the model about 8 times larger (`n_embd = 256`, `n_layer = 8`) for the same 2,000 updates used about twice the compute, 6.1 × 10¹³ FLOPs, and reached only `1.775`. In experiments at this scale, training the same model longer gave more improvement per unit of compute than making the model larger.
+Each doubling of updates lowered the validation loss by 0.11–0.22. Increasing the update count fourfold, from 2,000 to 8,000, lowered the validation loss from `1.910` to `1.615`. The total estimated compute for the 8,000-update run was 3.2 × 10¹³ FLOPs. By comparison, training a model about 8 times larger (`n_embd = 256`, `n_layer = 8`) for 2,000 updates used about twice that total, 6.1 × 10¹³ FLOPs, and reached only `1.775`. In experiments at this scale, training the same model longer gave more improvement per unit of compute than making the model larger.
 
 Repeated passes over the training data widen the gap between training and validation loss, however. In the 8,000-update run, `estimate_loss()`'s validation loss rose from `1.577` at update 7,000 to `1.625` at update 8,000, a sign that overfitting was beginning.
 
@@ -121,15 +121,7 @@ A model with `n_layer = 6` and `n_embd = 256` (4.73 million parameters) was trai
 
 Within this range, dropout barely narrowed the gap between training and validation loss, and the validation loss ended higher. Dropout slows learning in exchange for limiting overfitting, so its benefit likely appears only when training continues until the validation loss starts to rise. The source configuration file uses `dropout = 0.2` for a larger model trained for 5,000 updates.
 
-## Reading the results and their limits
-
-These results come from small conditions: Tiny Shakespeare (about one million training characters), a character vocabulary, at most 6.31 million parameters, and a few minutes of CPU time.
-
-- Each condition was trained once; variation across seeds was not measured.
-- The learning rate and other settings stayed tuned for chapter 11's model rather than being adjusted per condition.
-- The evaluation has an error of about 0.02–0.03.
-
-Even so, the experiments show that model width, training length, and the amount of data interact, and that the way compute is spent changes the outcome substantially. Large-scale studies run such experiments systematically over wide ranges to find the compute-optimal model size and number of training tokens.
+These are small-scale experiments on Tiny Shakespeare, with one training run per condition. The learning rate and other settings remain fixed at chapter 11's values, and variation across seeds is untested. With evaluation error of about 0.02–0.03 as well, read these results as trends within these conditions.
 
 ## Verify in code
 
@@ -169,6 +161,6 @@ python train.py config/train_shakespeare_char.py --device=cpu --compile=False \
 
 ## Next chapter
 
-Even at small scale, widening the model and training longer lowered the validation loss while widening the gap between training and validation loss. For the same compute, training longer was more effective at this scale, and the effect of longer contexts could not be separated from the effect of fewer sequences per batch.
+Reducing loss within a limited compute budget depends on how that budget is divided between model size and training volume. In these experiments, training the same model longer was more efficient than making it larger.
 
 nanoGPT supports pretraining experiments like these. The final chapter looks at how nanochat, by the same author, extends the model, tokenizer, training, conversational fine-tuning, and inference.

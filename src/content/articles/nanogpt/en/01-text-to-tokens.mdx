@@ -81,7 +81,7 @@ Sorting happens **only when building the vocabulary**. Encoding preserves input 
 
 ## Encode with the Shakespeare vocabulary
 
-The input below uses the 65-character vocabulary built from the full Tiny Shakespeare text with the same procedure as `data/shakespeare_char/prepare.py`. Each character is converted to the ID used in the training data as you type. Uppercase and lowercase letters have separate IDs; spaces and newlines also have IDs. The initial text is a passage near the start of the validation data `val.bin`; figures from chapter 5 onward use the same passage.
+The input below uses the 65-character vocabulary built from the full Tiny Shakespeare text with the same procedure as `data/shakespeare_char/prepare.py`. Each character is converted to the ID used in the training data as you type. Uppercase and lowercase letters have separate IDs; spaces and newlines also have IDs. The initial text, `To be, or not to be?`, lets you check that repeated characters receive the same ID.
 
 <TokenInspector lang="en" />
 
@@ -134,7 +134,7 @@ All files reside in `data/shakespeare_char/`. The contents and sizes below corre
 
 </div>
 
-Each `uint16` occupies two bytes, so each `.bin` file's size is twice its token count. Every character in this corpus occupies one UTF-8 byte, making the combined binary files twice the size of `input.txt`.
+Each `uint16` is an unsigned integer occupying two bytes, so each `.bin` file's size is twice its token count. Every character in this corpus occupies one UTF-8 byte, making the combined binary files twice the size of `input.txt`.
 
 The `.bin` files store the IDs. Readers specify `uint16` and obtain the character mapping from `meta.pkl`. Running `prepare.py` again overwrites these three output files.
 

@@ -8,12 +8,35 @@ export const backpropUi = {
     future: 't より後の位置への勾配',
     zero: 'すべて 0',
     position: '位置',
-    tyingCaption: '共有した重み wte.weight の各行に届く勾配のノルム',
+    tyingCaption: '1 文字の重みに対する勾配を、入力側と出力側で比べる',
     tyingNote:
-      '上段は lm_head として使った経路、下段は埋め込みとして使った経路からの勾配です。横軸は語彙の 65 文字で、入力の 64 文字に含まれる文字を濃く表示しています。縦軸は対数目盛です。',
-    outputPath: '出力側（lm_head）の経路',
-    inputPath: '入力側（埋め込み）の経路',
-    rowsInInput: '入力に含まれる文字',
+      '棒の長さは、その文字の重み 1 行に対する勾配の大きさ（ノルム）です。入力側と出力側を同じ目盛りで表示しています。',
+    tyingCharacter: '比べる文字',
+    tyingCharacterHint:
+      '文字を選択（太字は入力に含まれる文字、␣ は空白、\\n は改行）',
+    tyingSelected:
+      '「{char}」は、入力の {total} 文字中に {count} 回登場します。',
+    tyingPresentExplanation:
+      '入力側では埋め込みとして使い、出力側では予測候補として使うため、両方の計算から勾配が求まります。',
+    tyingAbsentExplanation:
+      '入力側ではこの文字の埋め込みを使わないため、勾配は 0 です。出力側では予測候補として使うため、勾配があります。',
+    inputPath: '入力側',
+    outputPath: '出力側',
+    tyingInputUse: '埋め込みとして使う',
+    tyingOutputUse: '予測候補として使う',
+    tyingAxis: '勾配の大きさ（ノルム）',
+    tyingOverview:
+      '勾配が 0 以外の文字：入力側 {input} / {total} 文字、出力側 {output} / {total} 文字。',
+    tyingSumNote:
+      '足し合わせるのは、各行の 128 個の勾配です。ここで表示した 2 つの大きさを足しても、共有した重みの勾配の大きさにはなりません。',
+    tyingAllRows: '全 65 文字の値を見る',
+    tyingRow: '文字（重みの 1 行）',
+    tyingOccurrences: '入力中の回数',
+    tyingNormDefinition: 'ノルムの計算方法',
+    tyingNormExplanation:
+      '1 行には 128 個の重みがあり、それぞれに勾配があります。その 128 個の勾配をそれぞれ 2 乗し、合計の平方根を取った値をノルムと呼びます。大きさをまとめた値なので、各勾配の正負は表示されません。',
+    tyingSpace: '空白',
+    tyingNewline: '改行',
     normsCaption: '学習中の勾配のノルム（パラメータごと、クリップ前）',
     normsNote:
       '第 11 章の学習で、各更新の backward 直後に記録した値です。横軸は対数目盛です。',
@@ -32,12 +55,35 @@ export const backpropUi = {
     zero: 'all 0',
     position: 'Position',
     tyingCaption:
-      'Gradient norm reaching each row of the shared weight wte.weight',
+      'Compare input-side and output-side gradients for one character’s weights',
     tyingNote:
-      'The upper half shows gradients through its use as lm_head, the lower half through its use as the embedding. The horizontal axis lists the 65 vocabulary characters; characters present in the 64 input characters are drawn darker. The vertical axis is logarithmic.',
-    outputPath: 'Output path (lm_head)',
-    inputPath: 'Input path (embedding)',
-    rowsInInput: 'Characters present in the input',
+      'Bar length shows the gradient magnitude (norm) for that character’s weight row. Both sides use the same scale.',
+    tyingCharacter: 'Character to compare',
+    tyingCharacterHint:
+      'Select a character (bold: present in the input; ␣: space; \\n: newline).',
+    tyingSelected:
+      'Occurrences of “{char}” in the {total}-character input: {count}.',
+    tyingPresentExplanation:
+      'This character is used both as an input embedding and as a prediction candidate, so both computations contribute gradients.',
+    tyingAbsentExplanation:
+      'This character’s embedding is unused on the input side, so its gradient is 0. It is still a prediction candidate on the output side, which contributes a gradient.',
+    inputPath: 'Input side',
+    outputPath: 'Output side',
+    tyingInputUse: 'Used as an embedding',
+    tyingOutputUse: 'Used as a prediction candidate',
+    tyingAxis: 'Gradient magnitude (norm)',
+    tyingOverview:
+      'Characters with nonzero gradients: input side {input} / {total}, output side {output} / {total}.',
+    tyingSumNote:
+      'The quantities added are the 128 gradient components in each row. Adding the two magnitudes displayed here does not give the magnitude of the shared weight’s gradient.',
+    tyingAllRows: 'View values for all 65 characters',
+    tyingRow: 'Character (one weight row)',
+    tyingOccurrences: 'Input occurrences',
+    tyingNormDefinition: 'How the norm is calculated',
+    tyingNormExplanation:
+      'One row has 128 weights, each with its own gradient. The norm is the square root of the sum of the squares of these 128 gradients. It summarizes magnitude, so the signs of individual gradients are not shown.',
+    tyingSpace: 'Space',
+    tyingNewline: 'Newline',
     normsCaption:
       'Gradient norms during training (per parameter, before clipping)',
     normsNote:

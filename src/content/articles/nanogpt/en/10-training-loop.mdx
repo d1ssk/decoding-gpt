@@ -22,10 +22,12 @@ import GradNormHistory from '../../../../components/GradNormHistory.astro';
 
 ## What one update does
 
-So far we have covered building batches (chapter 2), the forward pass and loss (chapters 3–8), and computing gradients (chapter 9). [The training loop in `train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L249-L333) combines them to update the weights repeatedly. With distributed training (DDP), logging, and comments removed, it looks like this:
+So far we have covered building batches (chapter 2), the forward pass and loss (chapters 3–8), and computing gradients (chapter 9). [The training loop in `train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L249-L333) combines them to update the weights repeatedly. Distributed training (DDP) and logging are omitted, and the original comments are replaced with brief explanatory comments.
+
+A batch is a general term for a group of data processed together. Here, we call the same batches retrieved by `get_batch()` in earlier chapters **micro-batches**. When accumulating gradients, this distinguishes the data processed in one forward/backward pass from all the data used for one weight update.
 
 ```python
-X, Y = get_batch('train')
+X, Y = get_batch('train')  # Micro-batch of inputs X and targets Y
 while True:
     lr = get_lr(iter_num) if decay_lr else learning_rate
     for param_group in optimizer.param_groups:
@@ -36,17 +38,17 @@ while True:
         # save a checkpoint when the validation loss improves (see below)
 
     for micro_step in range(gradient_accumulation_steps):
-        with ctx:
+        with ctx:  # Use mixed precision when configured
             logits, loss = model(X, Y)
-            loss = loss / gradient_accumulation_steps
-        X, Y = get_batch('train')
-        scaler.scale(loss).backward()
+            loss = loss / gradient_accumulation_steps  # Average accumulated gradients
+        X, Y = get_batch('train')  # Fetch the next micro-batch ahead of time
+        scaler.scale(loss).backward()  # Scale loss and accumulate gradients
     if grad_clip != 0.0:
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-    scaler.step(optimizer)
-    scaler.update()
-    optimizer.zero_grad(set_to_none=True)
+        scaler.unscale_(optimizer)  # Restore gradient scale before clipping
+        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)  # Limit gradient norm
+    scaler.step(optimizer)  # Update weights using accumulated gradients
+    scaler.update()  # Adjust the scaling factor
+    optimizer.zero_grad(set_to_none=True)  # Clear gradients for the next update
 
     iter_num += 1
     if iter_num > max_iters:
@@ -65,21 +67,21 @@ One update (iteration) proceeds as follows:
 
 ## The optimizer and which weights decay
 
-The optimizer is created before the loop by [`GPT.configure_optimizers()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L263-L287) (printing and comments omitted):
+The optimizer is created before the loop by [`GPT.configure_optimizers()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L263-L287) (printing and original comments omitted; explanatory comments added):
 
 ```python
-param_dict = {pn: p for pn, p in self.named_parameters()}
-param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
-decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
-nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
-optim_groups = [
+param_dict = {pn: p for pn, p in self.named_parameters()}  # Dictionary: name pn → parameter p
+param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}  # Keep parameters requiring gradients
+decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]  # Apply weight decay to arrays with 2+ dimensions
+nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]  # Exclude one-dimensional arrays such as biases
+optim_groups = [  # Set weight decay strength for each group
     {'params': decay_params, 'weight_decay': weight_decay},
     {'params': nodecay_params, 'weight_decay': 0.0}
 ]
-fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
-use_fused = fused_available and device_type == 'cuda'
-extra_args = dict(fused=True) if use_fused else dict()
-optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters  # Check support for the fused argument
+use_fused = fused_available and device_type == 'cuda'  # Fuse operations on CUDA when supported
+extra_args = dict(fused=True) if use_fused else dict()  # Add fused=True when enabled
+optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)  # ** unpacks extra arguments
 ```
 
 Parameters are split into two groups: **arrays with two or more dimensions** (linear-transformation weights and embeddings) and **one-dimensional arrays** (biases and LayerNorm `weight`). Only the first group receives weight decay. The tied `wte` and `lm_head` appear once in `named_parameters()`.
@@ -88,24 +90,35 @@ For chapter 11's model (`bias=False`), weight decay applies to 18 arrays with 80
 
 ## The AdamW update
 
-`torch.optim.AdamW` keeps two moving averages of the gradient for each weight. With update count $k$ and gradient $g$:
+The optimizer created above decides how far to move each weight using the computed gradients. nanoGPT uses **AdamW**, which combines **Adam**, a method that adapts the step size for each weight, with **weight decay**, which pulls weights slightly toward 0. PyTorch implements it as `torch.optim.AdamW`.
+
+**Adam** stands for **Adaptive Moment Estimation**. Here, the moments are the mean gradient and the mean squared gradient. Adam estimates both from past gradients to adjust the direction and size of each update. The **W** refers to weight decay: AdamW applies weight shrinkage separately from the gradient-based update.
+
+First, update two moving averages for each weight: $m$ for the gradient and $v$ for the squared gradient. With update count $k$ and current gradient $g$, the equations are below. $\beta_1$ and $\beta_2$ determine how much of the previous averages to retain.
 
 $$
 m_k = \beta_1 m_{k-1} + (1-\beta_1)\,g,\qquad
 v_k = \beta_2 v_{k-1} + (1-\beta_2)\,g^2
 $$
 
+Initializing $m$ and $v$ at zero pulls the early averages toward zero. Divide by the total weight assigned to observed gradients, $1-\beta_1^k$ (or $1-\beta_2^k$ for $v$), to correct this bias.
+
 $$
 \hat m_k = \frac{m_k}{1-\beta_1^k},\qquad
-\hat v_k = \frac{v_k}{1-\beta_2^k},\qquad
+\hat v_k = \frac{v_k}{1-\beta_2^k}
+$$
+
+Use these corrected values to update the weight $\theta$:
+
+$$
 \theta \leftarrow \theta\,(1-\eta\lambda) - \eta\,\frac{\hat m_k}{\sqrt{\hat v_k}+\varepsilon}
 $$
 
-$m$ estimates the mean gradient and $v$ the mean squared gradient; $\hat m$ and $\hat v$ correct the bias from their zero initialization. $\eta$ is the learning rate, $\lambda$ is `weight_decay`, and $\varepsilon = 10^{-8}$. In [`config/train_shakespeare_char.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/config/train_shakespeare_char.py#L27-L31), $\beta_1 = 0.9$, $\beta_2 = 0.99$, and $\lambda = 0.1$ (the `train.py` default).
+$\eta$ is the learning rate, $\lambda$ is `weight_decay`, and $\varepsilon = 10^{-8}$ is a small value that prevents division by zero. In [`config/train_shakespeare_char.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/config/train_shakespeare_char.py#L27-L31), $\beta_1 = 0.9$, $\beta_2 = 0.99$, and $\lambda = 0.1$ (the `train.py` default).
 
-The step is determined by $\hat m/\sqrt{\hat v}$, not proportional to the gradient's size. On the first update, $\hat m = g$ and $\hat v = g^2$, so the step is almost exactly $-\eta\,\operatorname{sign}(g)$: **every weight moves by about the learning rate**. As the previous chapter showed, gradient sizes differ by more than a factor of 100 between parameters. AdamW evens out step sizes by dividing each weight's gradient by its typical size.
+The subtraction on the right is the gradient-based update. It adjusts the step size by dividing the mean gradient $\hat m$ by $\sqrt{\hat v}$, which represents the gradient's typical size. On the first update, $\hat m = g$ and $\hat v = g^2$. When $|g|$ is much larger than $\varepsilon$, this update is approximately $-\eta\,\operatorname{sign}(g)$: **the first gradient-based step has about the same magnitude as the learning rate**. As the previous chapter showed, gradient sizes differ by more than a factor of 100 between parameters. AdamW adjusts for these differences separately for each weight.
 
-The $\theta(1-\eta\lambda)$ term is **weight decay**. Independently of the gradient, it pulls weights slightly toward 0 at every update. AdamW applies this shrinkage separately from the gradient normalization.
+The $\theta(1-\eta\lambda)$ term is **weight decay**. Independently of the gradient, it pulls weights slightly toward 0 at every update. This discourages excessively large weights and helps prevent overfitting to the training data. AdamW applies this shrinkage separately from the gradient normalization.
 
 ## The learning-rate schedule
 
@@ -140,7 +153,7 @@ Setting `lr_decay_iters` larger than `max_iters` (2000) ends training before the
 
 ## Gradient clipping
 
-Before AdamW, the loop [clips the gradients](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L306-L309):
+Before AdamW, the loop [clips the gradients](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L306-L309). This limits excessively large gradients to help stabilize training.
 
 ```python
 if grad_clip != 0.0:
@@ -160,7 +173,9 @@ With batches of only 12 × 64 = 768 characters, the gradients vary widely in thi
 
 ## Gradient accumulation
 
-`gradient_accumulation_steps` is the number of small batches (micro-batches) used per update. Repeating forward and backward makes PyTorch **add** gradients into `.grad`. Dividing each loss by `gradient_accumulation_steps` makes the accumulated gradient equal to the gradient of the mean loss over one large batch made of all micro-batches.
+To use more data for one weight update, process small batches in sequence and add their gradients before updating the weights. This is **gradient accumulation**: processing less data at once reduces memory use. Each micro-batch contains `batch_size` input sequences.
+
+`gradient_accumulation_steps` is the number of micro-batches processed before one weight update. Repeating forward and backward makes PyTorch **add** gradients into `.grad`. Dividing each loss by `gradient_accumulation_steps` makes the accumulated gradient equal to the gradient of the mean loss over one large batch made of all micro-batches.
 
 The number of tokens used per update is computed in [`train.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/train.py#L101):
 
@@ -168,7 +183,11 @@ The number of tokens used per update is computed in [`train.py`](https://github.
 tokens_per_iter = gradient_accumulation_steps * ddp_world_size * batch_size * block_size
 ```
 
-Chapter 11's settings use 1 × 1 × 12 × 64 = 768 tokens; the default GPT-2 reproduction settings use 40 × 1 × 12 × 1,024 = 491,520 tokens. (With 8-GPU DDP, each GPU's accumulation count is divided by 8 and the total stays the same.)
+`ddp_world_size` is the number of processes participating in DDP (Distributed Data Parallel), typically one per GPU. Each process handles a different batch, and their gradients are averaged to update the weights. Without distributed training, this value is 1.
+
+Chapter 11 uses `gradient_accumulation_steps = 1` and `ddp_world_size = 1`, so **each micro-batch drawn from the training data produces one weight update**. Each update uses 12 input sequences × 64 tokens = 768 tokens.
+
+The default GPT-2 reproduction settings use 40 × 1 × 12 × 1,024 = 491,520 tokens. (With 8-GPU DDP, each GPU's accumulation count is divided by 8 and the total stays the same.)
 
 Inside the micro-batch loop, the next batch is fetched with `get_batch('train')` right after the forward pass. As the source comment says, this prepares and starts transferring the next batch on the CPU while the GPU is still computing the forward pass.
 
@@ -256,6 +275,6 @@ Lines 2–4 come from `configure_optimizers()` and show the two weight-decay gro
 
 ## Next chapter
 
-The training loop repeatedly sets the learning rate, accumulates gradients, clips them, and updates the weights with AdamW. AdamW evens out step sizes by dividing by each weight's gradient size, and weight decay gradually shrinks only the weights with two or more dimensions. The learning rate rises during warmup and then follows a cosine decay, and checkpoints are saved when evaluation shows an improved validation loss.
+The training loop repeatedly computes gradients and updates the weights. Along the way, it adjusts the learning rate and step sizes, checks progress through validation loss, and saves the model state.
 
 The next chapter runs this training loop and observes the loss curve and the text generated at each stage of training.

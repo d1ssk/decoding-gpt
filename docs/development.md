@@ -108,8 +108,8 @@ npx prettier --write public/site/data/nanogpt/shakespeare-tokenizer.json
 
 The generator verifies the corpus SHA-256 and records both source commits in the
 artifact. Only the vocabulary and initial example are published, not the corpus.
-The initial example is the validation passage (`GREMIO:` …) that chapters 05–09
-inspect, so readers meet the same text from chapter 01 onward.
+The initial example, `To be, or not to be?`, lets readers check that repeated
+characters receive the same ID.
 `TokenInspector.astro` renders the initial IDs at build time and encodes edited
 input in the browser with that fixed vocabulary. Unknown characters produce an
 error. No network or Python runtime is needed to use the demo.
@@ -227,15 +227,18 @@ run, using the local snapshots:
 lab/nanogpt/.venv/bin/python experiments/nanogpt/trained_embeddings.py public/data/nanogpt
 ```
 
-`trained-embeddings.json` holds, per stage, the two leading principal components
+`trained-embeddings.json` holds, per stage, the three leading principal components
 of the 65 token rows (signs fixed so that the space has negative PC1 and `.`
-positive PC2), explained-variance ratios, the correlation of PC1 with log training
+positive PC2 and `a` positive PC3), explained-variance ratios, the correlation of PC1 with log training
 counts, cosine-similarity arrays for tokens (65 × 65) and positions (64 × 64) in
 per mille, mean position similarity by distance, and group means (vowels,
 consonants, uppercase, symbols, case pairs). `EmbeddingMap.astro` places each
 character as a glyph colored by class (a palette validated for color-vision
 deficiency; the glyph itself is the label) and lists cosine neighbors of a selected
-character. `PositionSimilarity.astro` draws the position heatmap on a canvas with
+character. Its 3D mode uses an orthographic SVG projection with a common scale
+across stages and axes, drag and arrow-key rotation, scroll/pinch and +/− key
+zoom (initially 1.5×), and a coordinate readout. Axes scale together with the points. Reset restores both rotation and zoom. PCA is fitted separately at each stage.
+`PositionSimilarity.astro` draws the position heatmap on a canvas with
 a blue–paper–orange diverging scale and the by-distance curve as SVG.
 
 ## Self-attention example

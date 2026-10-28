@@ -32,6 +32,8 @@ if targets is not None:
     loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 ```
 
+Here, `F` is an alias for `torch.nn.functional`, introduced by `from torch.nn import functional as F`.
+
 In chapter 2's training loop, `get_batch()` returned `X, Y`, which were passed to `model(X, Y)`. That `Y` is `targets` here.
 
 `F.cross_entropy()` expects a two-dimensional array with one prediction per row, so `view()` merges the batch and position axes:
@@ -48,11 +50,28 @@ It computes a loss for each of the `B·T` predictions and returns their mean as 
 
 ## Cross entropy
 
-Let $\boldsymbol{z}$ be the logits at position `t` and $y$ the target token. Writing $p_y$ for the target's softmax probability, the **cross entropy** at that position is:
+Let $\boldsymbol{z}$ be the logits at position `t` in sample `b` and $y$ the target token. Writing $p_y$ for the target's softmax probability, the **cross entropy** at that position is:
 
 $$
 \ell = -\log p_y = -z_y + \log\sum_{u=0}^{V-1}\exp(z_u)
 $$
+
+<details>
+<summary>Note: cross entropy in information theory</summary>
+
+For two probability distributions $p$ and $q$ over the same discrete set of outcomes, cross entropy is defined as:
+
+$$
+H(p, q) = -\sum_x p(x)\log q(x)
+$$
+
+Intuitively, it measures **how well a predicted distribution $q$ fits the actual distribution $p$**. It increases when $q$ assigns low probability to outcomes that occur often. For a fixed $p$, lower values mean a better fit, and the minimum occurs at $q = p$. Even a perfect match generally gives a value above 0: that minimum is the entropy $H(p)$, which represents the uncertainty in $p$ itself.
+
+With logarithms to base 2, the unit is bits; with natural logarithms, it is nats. Terms with $p(x) = 0$ are treated as 0. If $p(x) > 0$ but $q(x) = 0$, cross entropy is infinite.
+
+Here, $p$ is the actual distribution and $q$ is the predicted distribution. These symbols have different roles from the $p$ used for predicted probabilities in the main text.
+
+</details>
 
 `F.cross_entropy()` computes this directly from the logits, which is more numerically stable than computing softmax and log separately. Its `reduction` defaults to `'mean'`, so the batch loss is the average over all $N = B \cdot T$ predictions:
 
@@ -63,7 +82,7 @@ $$
 This loss has the following properties:
 
 - If the target probability is 1, the loss is 0; as it approaches 0, the loss grows without bound.
-- Only the target probability enters the loss. Other tokens' probabilities affect it indirectly through the softmax denominator.
+- The loss is calculated from the target token's probability. That probability depends on every token's logit through softmax.
 - Assigning every token the same probability $1/V$ gives a loss of $\ln V$. With 65 tokens, $\ln 65 \approx 4.174$.
 
 The diagram below is an illustrative example with five tokens. Change the logits to see how the softmax probabilities and the loss respond. Raising the target's logit lowers the loss; raising another token's logit lowers the target probability and raises the loss.
@@ -72,13 +91,13 @@ The diagram below is an illustrative example with five tokens. Change the logits
 
 ### The loss as an average log probability
 
-The probability of a whole text is the product of each position's conditional probability:
+The probability that $x_2, \dots, x_T$ follows the first token $x_1$ is the product of each position's conditional probability:
 
 $$
-p(x_1, \dots, x_T) = \prod_{t} p(x_{t+1} \mid x_1, \dots, x_t)
+p(x_2, \dots, x_T \mid x_1) = \prod_{t=1}^{T-1} p(x_{t+1} \mid x_1, \dots, x_t)
 $$
 
-Taking the log turns the product into a sum, so reducing the average loss is the same as increasing the probability of the entire training text.
+Multiplying the probabilities assigned to the correct token at each position gives the probability of the correct continuation. The sum of the losses at those positions is the negative logarithm of this product. Reducing the average loss on the same data therefore corresponds to increasing the probability assigned to the correct sequence.
 
 The loss is measured in nats (natural logarithm). Dividing by $\ln 2$ converts it to bits, and $e^{\mathcal{L}}$ is called the **perplexity**. Perplexity expresses the difficulty as “equivalent to guessing among this many candidates on average.” It is 65 for a uniform prediction and about 6.6 for the validation loss of `1.8857` reached by the model trained in chapter 11.
 

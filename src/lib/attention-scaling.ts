@@ -56,7 +56,7 @@ export const attentionScalingUi = {
     raw: 'q · k (unscaled)',
     scaled: 'q · k / √d (nanoGPT)',
     d: 'Head size d',
-    note: 'Each of 4,000 trials draws one query and 64 keys whose components are independent standard normal values. The effective number of positions is exp(H), where H is the entropy of the softmax weights.',
+    note: 'The values are averages over 4,000 trials, each drawing one query and 64 keys whose components are independent standard normal values. The effective number of positions is exp(H), where H is the entropy of the softmax weights.',
     table: 'Show the values as a table',
     std: 'Standard deviation',
     effective: 'Effective positions',

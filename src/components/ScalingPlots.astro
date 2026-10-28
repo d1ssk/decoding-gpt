@@ -1,6 +1,6 @@
 ---
 import data from '../../public/site/data/nanogpt/scaling.json';
-import { scalingUi, widthColors } from '../lib/scaling';
+import { layerMarkers, scalingUi, widthColors } from '../lib/scaling';
 import {
   formatCompact,
   linearScale,
@@ -30,6 +30,7 @@ const size = byGroup('model-size');
 const sx = logScale([1e4, 1e7], [margin.left, plotRight]);
 const sy = linearScale([1.5, 2.5], [plotBottom, margin.top]);
 const widths = [...new Set(size.map((r) => r.nEmbd))];
+const layers = [...new Set(size.map((r) => r.nLayer))].sort((a, b) => a - b);
 
 // Training length
 const length = byGroup('training-length');
@@ -90,11 +91,57 @@ const yTicks = (scale: typeof sy, min: number, max: number) =>
   </fieldset>
 
   <div data-panel="size">
+    <div class="size-legend">
+      <p class="legend">
+        <span class="legend-label">{ui.widthLegend}</span>
+        {widths.map((w) => (
+          <span class="item">
+            <span
+              class="key"
+              style={`border-color: ${widthColors[w]}`}
+              aria-hidden="true"
+            />
+            {w}
+          </span>
+        ))}
+      </p>
+      <p class="legend">
+        <span class="legend-label">{ui.layerLegend}</span>
+        {layers.map((layer) => (
+          <span class="item">
+            <svg class="marker-key" viewBox="-9 -9 18 18" aria-hidden="true">
+              <path d={layerMarkers[layer]} fill="currentColor" />
+            </svg>
+            {layer}
+          </span>
+        ))}
+      </p>
+      <p class="legend">
+        <span class="item">
+          <svg class="marker-key" viewBox="-9 -9 18 18" aria-hidden="true">
+            <path d={layerMarkers[1]} fill="currentColor" />
+          </svg>
+          {ui.valLoss}
+        </span>
+        <span class="item">
+          <svg class="marker-key" viewBox="-9 -9 18 18" aria-hidden="true">
+            <path
+              d={layerMarkers[1]}
+              fill="var(--paper)"
+              stroke="currentColor"
+              class="hollow"
+            />
+          </svg>
+          {ui.trainLoss}
+        </span>
+      </p>
+    </div>
     <svg
       viewBox={`0 0 ${width} ${height}`}
       role="img"
       aria-label={ui.tabs.size}
     >
+      <desc>{ui.sizeNote}</desc>
       {yTicks(sy, 1.5, 2.5).map(({ v, y }) => (
         <>
           <path d={`M${margin.left} ${y}H${plotRight}`} class="grid" />
@@ -136,22 +183,29 @@ const yTicks = (scale: typeof sy, min: number, max: number) =>
             />
             {rows.map((r) => (
               <>
-                <circle
-                  cx={sx(r.nonEmbeddingParameters)}
-                  cy={sy(r.fixedVal)}
-                  r="4"
-                  fill={color}
+                <g
+                  transform={`translate(${sx(r.nonEmbeddingParameters)} ${sy(r.fixedVal)})`}
                 >
-                  <title>{`L=${r.nLayer}, C=${r.nEmbd}: val ${r.fixedVal}, train ${r.fixedTrain}`}</title>
-                </circle>
-                <circle
-                  cx={sx(r.nonEmbeddingParameters)}
-                  cy={sy(r.fixedTrain)}
-                  r="3.5"
-                  fill="var(--paper)"
-                  stroke={color}
-                  class="hollow"
-                />
+                  <path
+                    d={layerMarkers[r.nLayer]}
+                    fill={color}
+                    class="model-point"
+                  >
+                    <title>{`n_layer=${r.nLayer}, n_embd=${r.nEmbd}: ${ui.valLoss} ${r.fixedVal}`}</title>
+                  </path>
+                </g>
+                <g
+                  transform={`translate(${sx(r.nonEmbeddingParameters)} ${sy(r.fixedTrain)})`}
+                >
+                  <path
+                    d={layerMarkers[r.nLayer]}
+                    fill="var(--paper)"
+                    stroke={color}
+                    class="model-point hollow"
+                  >
+                    <title>{`n_layer=${r.nLayer}, n_embd=${r.nEmbd}: ${ui.trainLoss} ${r.fixedTrain}`}</title>
+                  </path>
+                </g>
               </>
             ))}
             <text
@@ -521,6 +575,28 @@ const yTicks = (scale: typeof sy, min: number, max: number) =>
     align-items: center;
     display: inline-flex;
     gap: 0.35rem;
+  }
+  .size-legend {
+    margin-bottom: 0.75rem;
+  }
+  .size-legend .legend {
+    align-items: center;
+    font-size: 0.8rem;
+    margin: 0.35rem 0;
+    gap: 0.3rem 1rem;
+  }
+  .legend-label {
+    font-weight: 600;
+  }
+  .marker-key {
+    width: 18px;
+    height: 18px;
+    flex: none;
+  }
+  @media (max-width: 480px) {
+    .model-point {
+      transform: scale(1.3);
+    }
   }
   .key {
     border-top: 3px solid;

@@ -17,7 +17,7 @@ experimentId: nanogpt-09-backpropagation
 ---
 
 import CrossEntropyToy from '../../../../components/CrossEntropyToy.astro';
-import GradientFlow from '../../../../components/GradientFlow.astro';
+import BackpropagationToy from '../../../../components/backpropagation/BackpropagationToy';
 import TiedGradient from '../../../../components/TiedGradient.astro';
 import GradientNorms from '../../../../components/GradientNorms.astro';
 
@@ -42,6 +42,8 @@ X, Y = get_batch('train')
 # backward pass, with gradient scaling if training in fp16
 scaler.scale(loss).backward()
 ```
+
+`X, Y = get_batch('train')` prepares the next batch early to reduce waiting time. To follow the gradient computation in this chapter, you can skip this line and focus on how the `loss` computed by `model(X, Y)` is passed to `backward()`.
 
 `scaler` enlarges the loss when training in float16. With chapter 11's settings (float32 on CPU) it does nothing, so the effective call is `loss.backward()`. When it finishes, every `Parameter` in the model has a gradient of the same shape in `.grad`.
 
@@ -73,9 +75,98 @@ The diagram below adds the gradient $p - y$ to the five-token example from the p
 
 ## Trace back through the layers
 
-The logit gradient passes back through `lm_head`, `ln_f`, and each block in reverse order until it reaches the embeddings. Here are the rules for the main operations.
+The previous section calculated the loss gradient with respect to the logits. **Backpropagation uses this gradient as its starting point and traces the computation backward to calculate the loss gradients with respect to all learnable model parameters.** It processes `lm_head`, `ln_f`, the Transformer blocks, and the embedding layer in that order.
 
-For a **linear transformation** $\boldsymbol{y} = W\boldsymbol{x}$, the gradient with respect to the input is $W^\top\,\partial\mathcal{L}/\partial\boldsymbol{y}$, and the gradient with respect to the weight is the outer product of $\partial\mathcal{L}/\partial\boldsymbol{y}$ and $\boldsymbol{x}$. The same weight is used at every position in the batch, so **the weight gradient is the sum of the outer products over `B·T` positions**.
+At each operation, **we receive the loss gradient with respect to its output, calculate its parameter gradients, and convert it into an input gradient to pass to the preceding operation**. For an operation $\boldsymbol{y}=f(\boldsymbol{x};\theta)$, the gradient received from downstream is $\partial\mathcal{L}/\partial\boldsymbol{y}$. Combining it with the derivatives of $f$ using the chain rule gives the parameter gradient $\partial\mathcal{L}/\partial\theta$ and the input gradient $\partial\mathcal{L}/\partial\boldsymbol{x}$ needed to continue backpropagation. **The received gradient already summarizes the effect of the downstream computation on the loss**, so each operation only needs its own derivatives.
+
+The calculation requires three ingredients:
+
+- **The loss gradient with respect to the output**: the value passed from downstream.
+- **Forward-pass values**: parameters and the inputs and intermediate values needed for differentiation, saved or recomputed as needed.
+- **The operation's derivative rules**: the relationships between changes in the output and changes in its inputs and parameters.
+
+For example, with $y=wx$ and gradient $g=\partial\mathcal{L}/\partial y$ received from downstream:
+
+$$
+\frac{\partial\mathcal{L}}{\partial w}=gx,
+\qquad
+\frac{\partial\mathcal{L}}{\partial x}=gw
+$$
+
+The expression on the left is the parameter gradient we want; the one on the right is the gradient passed further backward. **Given the output gradient and forward-pass values, numerical calculations following local derivative rules suffice to compute the gradients.** There is no need to perturb each weight and measure the loss again.
+
+Each operation accumulates its parameter gradients and passes its input gradient to the preceding operation. Contributions from multiple paths are added. Repeating this throughout the computation gives gradients for all learnable parameters. Parameters stay fixed during backpropagation and are updated after it finishes.
+
+### Gradients of a linear transformation with respect to its input and weight
+
+First, extend the scalar example $y=wx$ to arrays with the linear transformation $\boldsymbol{y}=W\boldsymbol{x}$. Given the loss gradient $\boldsymbol{g}$ with respect to the output, the forward input $\boldsymbol{x}$ gives the weight gradient $\boldsymbol{g}\boldsymbol{x}^\top$. At the same time, the weight $W$ gives the input gradient $W^\top\boldsymbol{g}$ to pass to the preceding operation. Summing the contributions from every position in the batch that uses this weight gives the weight gradient contributed by this linear transformation.
+
+<details>
+<summary>Partial derivatives: linear transformation inputs and weights</summary>
+
+First consider a **linear transformation** $\boldsymbol{y} = W\boldsymbol{x}$ at one position. With $I$ input elements and $O$ output elements, $W$ is a two-dimensional array of shape `[O, I]`. Each output is computed as follows, omitting the bias:
+
+$$
+y_i = \sum_{j=1}^{I} W_{ij}x_j
+\qquad (i=1,\dots,O)
+$$
+
+Write the loss gradient with respect to the output, received from downstream, as $g_i = \partial\mathcal{L}/\partial y_i$. Input $x_j$ affects each output $y_i$, with partial derivative $\partial y_i/\partial x_j = W_{ij}$. The chain rule adds the contributions through all outputs:
+
+$$
+\frac{\partial\mathcal{L}}{\partial x_j}
+= \sum_{i=1}^{O}
+\frac{\partial\mathcal{L}}{\partial y_i}
+\frac{\partial y_i}{\partial x_j}
+= \sum_{i=1}^{O} g_i W_{ij}
+$$
+
+Collecting this for all input elements gives $\partial\mathcal{L}/\partial\boldsymbol{x} = W^\top\boldsymbol{g}$.
+
+Next consider one weight element $W_{ij}$. It multiplies $x_j$ when computing output $y_i$, so:
+
+$$
+\frac{\partial y_k}{\partial W_{ij}}
+= \begin{cases}
+x_j & (k=i) \\
+0 & (k\ne i)
+\end{cases}
+$$
+
+Substituting into the chain rule leaves only the term with $k=i$:
+
+$$
+\frac{\partial\mathcal{L}}{\partial W_{ij}}
+= \sum_{k=1}^{O}
+\frac{\partial\mathcal{L}}{\partial y_k}
+\frac{\partial y_k}{\partial W_{ij}}
+= g_i x_j
+$$
+
+This is **the loss gradient with respect to output element $i$ multiplied by forward input element $j$**. Arranging these products for every pair $(i,j)$ gives the array $\boldsymbol{g}\boldsymbol{x}^\top$ of shape `[O, I]`, called the **outer product** of the two vectors.
+
+In practice, the same $W$ is used at every position in the batch. Writing the output at position $t$ of sample $b$ as $y_{b,t,i} = \sum_j W_{ij}x_{b,t,j}$, a single $W_{ij}$ affects the outputs at all positions. The chain rule therefore also sums over samples and positions:
+
+$$
+\begin{aligned}
+\frac{\partial\mathcal{L}}{\partial W_{ij}}
+&= \sum_{b=1}^{B}\sum_{t=1}^{T}\sum_{k=1}^{O}
+\frac{\partial\mathcal{L}}{\partial y_{b,t,k}}
+\frac{\partial y_{b,t,k}}{\partial W_{ij}} \\
+&= \sum_{b=1}^{B}\sum_{t=1}^{T} g_{b,t,i}\,x_{b,t,j}
+\end{aligned}
+$$
+
+This is why **the weight gradient is the sum of the outer products over `B·T` positions**. Add the arrays of shape `[O, I]` from each position element by element. When $\mathcal{L}$ is a mean loss, the averaging factor is already included in $g_{b,t,i} = \partial\mathcal{L}/\partial y_{b,t,i}$, so no further division by `B·T` is needed here. This formula gives the contribution through this linear transformation. If the weight is also shared with another operation, contributions from that path are added as well.
+
+</details>
+
+### Residual connections
+
+In a residual connection $\boldsymbol{y}=\boldsymbol{x}+f(\boldsymbol{x};\theta)$, the input $\boldsymbol{x}$ affects the output both through direct addition and through $f$. Addition has derivative 1 with respect to each input, so both calculations use the same loss gradient with respect to the output. Within $f$, this gradient gives the gradients with respect to its parameters $\theta$ and input $\boldsymbol{x}$. **The gradient for $\boldsymbol{x}$ passed to the preceding operation is the sum of the direct-addition contribution and the contribution calculated through $f$.**
+
+<details>
+<summary>Partial derivatives: residual connections, MLP, and LayerNorm</summary>
 
 For a **residual connection** $\boldsymbol{x}_{l+1} = \boldsymbol{x}_l + f(\boldsymbol{x}_l)$:
 
@@ -85,23 +176,161 @@ $$
 + \left(\frac{\partial f}{\partial\boldsymbol{x}_l}\right)^{\!\top}\frac{\partial\mathcal{L}}{\partial\boldsymbol{x}_{l+1}}
 $$
 
-The first term is the gradient that reaches the previous layer unchanged, bypassing the sublayer. It corresponds to the residual-stream advantage noted in chapter 6.
+The first term is the contribution from directly adding the input. The output gradient becomes part of the input gradient unchanged, which corresponds to the residual-stream advantage noted in chapter 6.
 
-In **attention**, the output at position `t` was a weighted sum of the values at itself and earlier positions. Backward, the gradient at position `t` is distributed to earlier positions according to the attention weights. Future positions, whose weights are 0 under the causal mask, receive no gradient.
+How is $\partial f/\partial\boldsymbol{x}_l$ computed? On nanoGPT's MLP branch, $f$ combines LayerNorm, two linear transformations, and GELU. Omitting dropout and writing the input as $\boldsymbol{x}$:
 
-The diagram below uses the model trained in chapter 11. It shows the norm of the gradient of one position's loss $\ell_t$ with respect to the embedding sum $\boldsymbol{x}$ (`wte` plus `wpe`) at every position. Select a character to show, as background shading, the gradient of the loss for predicting the next character at that position. Struck-through characters come after position `t`, and their gradients are all 0.
+$$
+\boldsymbol{u}=\operatorname{LN}(\boldsymbol{x}),\qquad
+\boldsymbol{a}=W_1\boldsymbol{u}+\boldsymbol{b}_1,\qquad
+\boldsymbol{h}=\operatorname{GELU}(\boldsymbol{a}),\qquad
+f(\boldsymbol{x})=W_2\boldsymbol{h}+\boldsymbol{b}_2
+$$
 
-<GradientFlow lang="en" />
+The partial derivative of $f_i$ with respect to input element $x_j$ follows by chaining the derivatives of these operations:
 
-The initial position, 61, is the loss for predicting `w` from the second `o` of `morrow`. The largest gradient norms go to the word-initial `m` (position 57, `26.1`) and the preceding `r` (position 60, `24.4`), both larger than the gradient at position 61 itself (`16.4`). The gradient shows which input positions the information used for the prediction is tied to.
+$$
+\frac{\partial f_i}{\partial x_j}
+= \sum_r\sum_k
+(W_2)_{ir}\,\operatorname{GELU}'(a_r)\,(W_1)_{rk}
+\frac{\partial u_k}{\partial x_j}
+$$
 
-Gradient norms exceed 1 because the embeddings are small (standard deviation `0.073` at position 52, as seen in chapter 6) and LayerNorm divides by that small standard deviation.
+The LayerNorm derivative can also be written explicitly. Let $C$ be the number of input elements, $\mu$ their mean, $\sigma^2$ their variance, and $\gamma_k$ the learned scale. For $u_k=\gamma_k(x_k-\mu)/\sqrt{\sigma^2+\varepsilon}+\beta_k$:
+
+$$
+\frac{\partial u_k}{\partial x_j}
+= \frac{\gamma_k}{\sqrt{\sigma^2+\varepsilon}}
+\left(
+\delta_{kj}-\frac{1}{C}
+-\frac{(x_k-\mu)(x_j-\mu)}{C(\sigma^2+\varepsilon)}
+\right)
+$$
+
+Here $\delta_{kj}$ is 1 when $k=j$ and 0 otherwise. Because the mean and variance are computed from the input, the derivative includes terms accounting for their changes.
+
+In practice, `backward()` combines each operation’s loss gradient with respect to its output and its derivative rule to compute its input gradient in turn. Writing the gradient with respect to the residual connection’s output as $\boldsymbol{g}$, the MLP branch proceeds as follows:
+
+$$
+\boldsymbol{g}_h=W_2^\top\boldsymbol{g},\qquad
+\boldsymbol{g}_a=\boldsymbol{g}_h\odot\operatorname{GELU}'(\boldsymbol{a}),\qquad
+\boldsymbol{g}_u=W_1^\top\boldsymbol{g}_a
+$$
+
+It then computes $(\partial\boldsymbol{u}/\partial\boldsymbol{x})^\top\boldsymbol{g}_u$. The symbol $\odot$ denotes elementwise multiplication. This gives the second term in the residual-connection formula. The attention branch similarly traces backward through the attention operations and the LayerNorm preceding them.
+
+The formulas above describe loss gradients with respect to the input, which are passed to the preceding operation. **Backpropagation also computes gradients for the weights and biases of $f$ along the way.** Let $\theta$ be one parameter of $f$, and write the residual connection as $\boldsymbol{y}=\boldsymbol{x}+f(\boldsymbol{x};\theta)$. Holding this operation's input $\boldsymbol{x}$ fixed, the directly added $\boldsymbol{x}$ term does not depend on $\theta$, so:
+
+$$
+\frac{\partial\mathcal{L}}{\partial\theta}
+= \sum_i \frac{\partial\mathcal{L}}{\partial y_i}
+\frac{\partial f_i}{\partial\theta}
+= \sum_i g_i\frac{\partial f_i}{\partial\theta}
+$$
+
+The gradient with respect to parameter $\theta$ comes from the contribution through $f$.
+
+For the MLP above, one position contributes the following weight and bias gradients. Here $\boldsymbol{g}_a$ is the gradient at the GELU input computed earlier:
+
+$$
+\begin{aligned}
+\frac{\partial\mathcal{L}}{\partial W_2}
+&= \boldsymbol{g}\boldsymbol{h}^{\top},
+&\frac{\partial\mathcal{L}}{\partial\boldsymbol{b}_2}
+&= \boldsymbol{g}, \\
+\frac{\partial\mathcal{L}}{\partial W_1}
+&= \boldsymbol{g}_a\boldsymbol{u}^{\top},
+&\frac{\partial\mathcal{L}}{\partial\boldsymbol{b}_1}
+&= \boldsymbol{g}_a
+\end{aligned}
+$$
+
+The gradients with respect to LayerNorm's learned parameters also follow from its output gradient $\boldsymbol{g}_u$ and forward-pass values:
+
+$$
+\frac{\partial\mathcal{L}}{\partial\gamma_k}
+= g_{u,k}\frac{x_k-\mu}{\sqrt{\sigma^2+\varepsilon}},
+\qquad
+\frac{\partial\mathcal{L}}{\partial\beta_k}=g_{u,k}
+$$
+
+Each parameter is shared across all samples and positions, so its actual gradient sums these contributions. Each operation **computes parameter gradients while passing input gradients further backward**, allowing the parameters in earlier layers to receive gradients in turn.
+
+</details>
+
+### Attention: gradients with respect to values and attention weights
+
+Attention follows the same procedure: use each operation's output gradient to compute its input gradients. First, trace backward through the weighted sum of values to calculate **the loss gradients with respect to both values and attention weights**. Attention weights are intermediate values computed from the input, so use their gradients to trace backward through softmax and the score's dot product, obtaining query and key gradients. Applying the linear transformation rules above to the operations that produced query, key, and value then gives the learned parameter gradients and the input gradient to pass to the preceding operation. Because the causal mask makes the loss at position $t$ independent of future input positions, the gradients with respect to those inputs are zero.
+
+<details>
+<summary>Partial derivatives: values, softmax, queries, and keys</summary>
+
+Consider one sample and one head, omitting the batch and head indices. Let $d$ be the number of elements per head. Omitting dropout, the output at position $t$ is:
+
+$$
+s_{t,u} = \frac{1}{\sqrt d}\sum_{r=1}^{d}q_{t,r}k_{u,r},
+\qquad
+a_{t,u} = \frac{\exp(s_{t,u})}{\sum_{j=1}^{t}\exp(s_{t,j})}
+\quad (u\le t)
+$$
+
+$$
+o_{t,r} = \sum_{u=1}^{t} a_{t,u}v_{u,r}
+$$
+
+Here $q$, $k$, and $v$ are query, key, and value, and $a$ is the attention weight. The causal mask sets weights for $u>t$ to 0. Write the loss gradient with respect to the output, received from downstream, as $g_{t,r} = \partial\mathcal{L}/\partial o_{t,r}$.
+
+First calculate **the loss gradient with respect to values**. Since $\partial o_{t,r}/\partial v_{u,j} = a_{t,u}\delta_{rj}$, the gradient with respect to the value at position $u$ sums the contributions through the outputs at every position $t\ge u$ that attends to it:
+
+$$
+\frac{\partial\mathcal{L}}{\partial v_{u,r}}
+= \sum_{t=u}^{T} a_{t,u}\,g_{t,r}
+$$
+
+This formula multiplies the output gradients $g$ by the forward attention weights $a$ and sums the products. Next calculate **the loss gradient with respect to the attention weights $a$**. Since $\partial o_{t,r}/\partial a_{t,u} = v_{u,r}$:
+
+$$
+h_{t,u} \equiv \frac{\partial\mathcal{L}}{\partial a_{t,u}}
+= \sum_{r=1}^{d} g_{t,r}v_{u,r}
+$$
+
+Next combine this gradient $h$ with the softmax derivative to calculate the score gradient. For elements in the same row, $\partial a_{t,j}/\partial s_{t,u} = a_{t,j}(\delta_{ju}-a_{t,u})$, so the chain rule gives:
+
+$$
+\begin{aligned}
+e_{t,u} \equiv \frac{\partial\mathcal{L}}{\partial s_{t,u}}
+&= \sum_{j=1}^{t} h_{t,j}a_{t,j}(\delta_{ju}-a_{t,u}) \\
+&= a_{t,u}\left(h_{t,u}-\sum_{j=1}^{t}a_{t,j}h_{t,j}\right)
+\end{aligned}
+$$
+
+Combining this gradient $e$ with the derivative of the dot product defining score $s$ gives the gradients with respect to query and key:
+
+$$
+\frac{\partial\mathcal{L}}{\partial q_{t,r}}
+= \frac{1}{\sqrt d}\sum_{u=1}^{t}e_{t,u}k_{u,r},
+\qquad
+\frac{\partial\mathcal{L}}{\partial k_{u,r}}
+= \frac{1}{\sqrt d}\sum_{t=u}^{T}e_{t,u}q_{t,r}
+$$
+
+Use the query, key, and value gradients as the output gradients of the linear transformations that produced them. Apply the linear transformation rules to compute weight and input gradients, adding the three contributions for their common input. In this way, **computing gradients with respect to intermediate values in turn gives the learned parameter gradients and the input gradient needed by the preceding operation**. Gradients with respect to masked scores with $u>t$ are zero. Consequently, the gradient of the loss $\ell_t$ at position $t$ with respect to inputs at future positions $u>t$ is also zero.
+
+</details>
+
+### Follow a linear transformation forward and backward
+
+The animation below computes a linear transformation $\boldsymbol{y}=W\boldsymbol{x}$ at one position using small arrays chosen for explanation. “Forward” computes the output from the input and weights. “Backward” starts with a given loss gradient $\partial\mathcal{L}/\partial\boldsymbol{y}=[2,-1]^\top$ and computes the weight and input gradients. Use “Play” or “Next step” to inspect which values are multiplied and where they are added.
+
+<BackpropagationToy lang="en" linearOnly client:visible />
 
 ## The tied weight receives gradients from two paths
 
-As seen in chapter 7, `wte.weight` is a single `Parameter` used as both the input embedding and the output `lm_head`. When one `Parameter` is used in several places, autograd **adds the gradients from each path** into `.grad`.
+As seen in chapter 7, `wte.weight` is shared between the input embedding and the output `lm_head`. When the same weight is used in several places, **the gradients from each path are added together** to obtain its gradient.
 
-The diagram below splits, by path, the gradient norm reaching each of the 65 rows of `wte.weight` for the 64 validation characters. To separate them, we make a copy with untied weights, run backward on the same loss, and check that the sum of the two gradients equals the gradient of the tied weight.
+`wte.weight` is a 65 × 128 array, with one row per character. Each of the 128 weights in a row has its own gradient. The figure calculates the norm of that gradient and compares the input-side and output-side values. The loss is the mean loss for next-character prediction over 64 validation characters.
+
+Use the character list below the chart to compare `n`, which appears in the input, with `!`, which does not. **A character absent from the input has zero input-side gradient but a nonzero output-side gradient.**
 
 <TiedGradient lang="en" />
 
@@ -109,8 +338,6 @@ The two paths deliver gradients differently:
 
 - **Output side**: at every position, the softmax denominator includes the logits of all tokens, so all 65 rows receive gradient.
 - **Input side**: only rows taken out as embeddings receive gradient. Only the rows of the 32 distinct characters in these 64 characters were nonzero.
-
-For this input, the input-side gradients (norms `0.12`–`3.0`) are larger than the output-side ones (`0.0001`–`0.77`). The row with the largest output-side gradient was `o` (`0.77`); on the input side it was `n` (`3.0`).
 
 ## Gradient sizes differ between parameters
 
@@ -207,6 +434,6 @@ The first line shows that the logit gradient equals $(p - y)/N$. The second comp
 
 ## Next chapter
 
-`loss.backward()` walks the operations recorded in the forward pass in reverse and applies the chain rule to compute every parameter's gradient. The starting logit gradient is $p - y$; residual connections pass gradients straight to earlier layers, and the causal mask makes gradients to future positions zero. The tied weight receives the sum of its input-side and output-side gradients.
+This chapter showed how the chain rule connects the derivatives of individual operations to calculate gradients for all learnable parameters from the loss. This is the backpropagation performed by `loss.backward()`.
 
 Gradients tell us which way to move the weights. The next chapter reads the whole training loop, including AdamW, which actually updates the weights from the gradients, the learning-rate schedule, and gradient clipping.

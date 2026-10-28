@@ -1,0 +1,338 @@
+.nm-demo {
+  --nm-orange: #a64516;
+  --nm-orange-bg: #fff1db;
+  --nm-blue: #275d91;
+  --nm-blue-bg: #e5f0fc;
+  color: var(--ink);
+  line-height: 1.65;
+}
+.nm-demo button,
+.nm-demo select {
+  font: inherit;
+}
+.nm-demo button {
+  cursor: pointer;
+  color: inherit;
+}
+.nm-demo button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.nm-demo button:focus-visible,
+.nm-demo select:focus-visible,
+.nm-demo input:focus-visible,
+.nm-canvas-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.nm-topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  border-bottom: 1px solid var(--line-strong);
+}
+.nm-demo-tabs {
+  display: flex;
+  gap: 1.5rem;
+}
+.nm-demo-tabs button {
+  background: transparent;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  padding: 0.85rem 0;
+  font-size: 0.9rem;
+}
+.nm-demo-tabs button[aria-pressed='true'] {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+  font-weight: 650;
+}
+.nm-direction {
+  display: flex;
+  padding: 0.2rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+}
+.nm-direction button {
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  padding: 0.35rem 0.85rem;
+  font-size: 0.85rem;
+}
+.nm-direction button[aria-pressed='true'] {
+  color: white;
+  background: var(--accent);
+}
+.nm-intro {
+  font-size: 0.85rem;
+  color: var(--ink-secondary);
+  margin: 1rem 0;
+  max-width: 62rem;
+}
+.nm-stage-tabs {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin: 1.1rem 0 0.8rem;
+}
+.nm-stage-tabs button {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  padding: 0.35rem 0.75rem;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+.nm-stage-tabs small {
+  color: var(--ink-muted);
+  font-size: 0.6rem;
+}
+.nm-stage-tabs button[aria-pressed='true'] {
+  background: var(--accent-light);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.nm-instrument {
+  border: 1px solid var(--line-strong);
+  background: #fcfbf8;
+}
+.nm-transport {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: #fcfbf8;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.nm-transport button {
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: transparent;
+  padding: 0.4rem 0.8rem;
+  min-height: 40px;
+  font-size: 0.82rem;
+}
+.nm-transport .nm-play {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+  min-width: 6.6rem;
+}
+.nm-speed {
+  margin-left: auto;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.75rem;
+}
+.nm-speed select {
+  border: 1px solid var(--line-strong);
+  background: var(--paper);
+  color: var(--ink);
+  border-radius: 3px;
+  padding: 0.35rem;
+}
+.nm-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.4rem 0;
+  min-height: 3.3rem;
+  font-size: 0.85rem;
+}
+.nm-status strong {
+  color: var(--accent);
+  font-weight: 550;
+}
+.nm-status span {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+.nm-canvas-scroll {
+  overflow-x: auto;
+}
+.nm-canvas {
+  display: block;
+  width: 100%;
+  min-width: 700px;
+  overflow: visible;
+}
+.nm-array-title {
+  font: 600 22px var(--font-mono);
+  fill: var(--ink);
+}
+.nm-array-title.target-title {
+  fill: var(--accent);
+}
+.nm-array-kind {
+  font: 11px var(--font-body);
+  fill: var(--ink-muted);
+}
+.nm-cell rect {
+  fill: #efeee8;
+  stroke: transparent;
+  stroke-width: 2;
+}
+.nm-cell text {
+  font: 22px var(--font-mono);
+  fill: var(--ink);
+  pointer-events: none;
+}
+.nm-cell.clickable {
+  cursor: pointer;
+}
+.nm-cell.clickable rect {
+  fill: #f1f5f0;
+}
+.nm-cell.clickable:hover rect,
+.nm-cell.clickable:focus rect {
+  stroke: var(--accent);
+}
+.nm-cell.clickable:focus {
+  outline: none;
+}
+.nm-cell:not(.computed) text {
+  fill: #8d998a;
+}
+.nm-cell.destination rect {
+  stroke: var(--accent);
+  fill: var(--accent-light);
+  stroke-width: 2.5;
+}
+.nm-cell.operand-0 rect {
+  fill: var(--nm-orange-bg);
+  stroke: var(--nm-orange);
+}
+.nm-cell.operand-1 rect {
+  fill: var(--nm-blue-bg);
+  stroke: var(--nm-blue);
+}
+.nm-cell.operand-0 text {
+  fill: var(--nm-orange);
+  font-weight: 700;
+}
+.nm-cell.operand-1 text {
+  fill: var(--nm-blue);
+  font-weight: 700;
+}
+.nm-bracket {
+  fill: none;
+  stroke: var(--line-strong);
+  stroke-width: 1.5;
+}
+.nm-equation-sign {
+  font: 32px var(--font-mono);
+  fill: var(--ink-muted);
+}
+.nm-progress {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0 1.4rem;
+}
+.nm-progress input {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.nm-progress output {
+  font: 0.7rem var(--font-mono);
+  min-width: 4.5rem;
+  text-align: right;
+}
+.nm-legend {
+  margin: 0.6rem 1.4rem 1rem;
+  font-size: 0.73rem;
+  color: var(--ink-secondary);
+}
+.nm-explanation {
+  font-size: 0.92rem;
+  line-height: 1.85;
+  margin: 1rem 0 0.7rem;
+}
+.nm-note {
+  font-size: 0.78rem;
+  color: var(--ink-secondary);
+  margin: 0.5rem 0;
+}
+.nm-demo--linear {
+  margin: 1.5rem 0 2rem;
+  min-width: 0;
+}
+.nm-demo--linear .nm-topbar {
+  padding-bottom: 0.8rem;
+}
+.nm-demo--linear .nm-canvas {
+  min-width: 640px;
+}
+.nm-demo--linear .nm-transport {
+  position: static;
+}
+.nm-demo--linear .nm-status {
+  flex-wrap: wrap;
+  gap: 0.3rem 1rem;
+}
+.nm-demo--linear .nm-intro,
+.nm-demo--linear .nm-explanation {
+  margin: 0.8rem 0;
+}
+.nm-demo--linear .nm-note {
+  margin: 0.5rem 0;
+}
+.nm-demo--linear .nm-legend {
+  margin: 0.6rem 1.4rem 1rem;
+}
+@media (max-width: 42rem) {
+  .nm-topbar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding-bottom: 0.8rem;
+  }
+  .nm-demo-tabs {
+    gap: 1.2rem;
+  }
+  .nm-demo-tabs button {
+    font-size: 0.8rem;
+  }
+  .nm-status {
+    padding: 0.8rem 0.75rem 0;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  .nm-transport {
+    padding: 0.6rem;
+    gap: 0.4rem;
+  }
+  .nm-transport button {
+    padding: 0.4rem 0.55rem;
+  }
+  .nm-speed {
+    margin-left: 0;
+  }
+  .nm-canvas {
+    min-width: 780px;
+  }
+  .nm-stage-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+  .nm-stage-tabs button {
+    flex-shrink: 0;
+  }
+  .nm-legend {
+    margin-inline: 0.75rem;
+  }
+}

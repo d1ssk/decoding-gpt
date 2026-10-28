@@ -41,6 +41,10 @@ else:
 
 After the last block, `ln_f` normalizes each position's vector with the same LayerNorm computation seen in the previous chapter. We call the normalized vector the **hidden state** and write it $\boldsymbol{h}_{b,t}$.
 
+Here, `targets` is an array of shape `[B, T]` containing **the ID of the next token to predict at each position**. It is the target array `Y` returned by `get_batch()` in [chapter 2](../02-context-and-training-examples/).
+
+During training and validation, `model(X, Y)` receives these targets and computes a loss by comparing its predictions with them. During generation, `model(idx)` receives only the input, so `targets` takes its default value of `None` and the `else` branch above computes the logits.
+
 `lm_head` is a linear transformation defined in `GPT.__init__()`:
 
 ```python
@@ -98,28 +102,49 @@ During training, `forward()` computes cross entropy directly from the logits; th
 
 When `forward()` is called without `targets`, it applies `lm_head` only to the last position, because generation needs only the distribution for the token following the input. Indexing with the list `x[:, [-1], :]` keeps the position axis and returns logits of shape `[B, 1, V]`.
 
-[`GPT.generate()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L305-L330) uses these logits to generate one token at a time (comments omitted):
+[`GPT.generate()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L305-L330), shown below, uses these logits to generate one token at a time. The argument `idx` is an array of input token IDs with shape `[B, T]`, where `B` is the number of sequences processed together and `T` is the number of tokens.
 
 ```python
-for _ in range(max_new_tokens):
-    idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
-    logits, _ = self(idx_cond)
-    logits = logits[:, -1, :] / temperature
-    if top_k is not None:
-        v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-        logits[logits < v[:, [-1]]] = -float('Inf')
-    probs = F.softmax(logits, dim=-1)
-    idx_next = torch.multinomial(probs, num_samples=1)
-    idx = torch.cat((idx, idx_next), dim=1)
+@torch.no_grad()
+def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+    """
+    Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
+    the sequence max_new_tokens times, feeding the predictions back into the model each time.
+    Most likely you'll want to make sure to be in model.eval() mode of operation for this.
+    """
+    for _ in range(max_new_tokens):
+        # if the sequence context is growing too long we must crop it at block_size
+        idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+        # forward the model to get the logits for the index in the sequence
+        logits, _ = self(idx_cond)
+        # pluck the logits at the final step and scale by desired temperature
+        logits = logits[:, -1, :] / temperature
+        # optionally crop the logits to only the top k options
+        if top_k is not None:
+            v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+            logits[logits < v[:, [-1]]] = -float('Inf')
+        # apply softmax to convert logits to (normalized) probabilities
+        probs = F.softmax(logits, dim=-1)
+        # sample from the distribution
+        idx_next = torch.multinomial(probs, num_samples=1)
+        # append sampled index to the running sequence and continue
+        idx = torch.cat((idx, idx_next), dim=1)
+
+    return idx
 ```
 
-1. If the input is longer than `block_size`, keep only its last `block_size` tokens, because the position embedding has only `block_size` rows.
-2. Divide the last position's logits by `temperature`.
-3. If `top_k` is given, set every logit outside the top `k` to `−∞`.
-4. Apply softmax and choose one token with `torch.multinomial()` according to those probabilities.
-5. Append the chosen token to the input and repeat.
+1. **Choose the context for the prediction.** `idx` holds the original input and all tokens generated so far. When its length exceeds `block_size`, take its last `block_size` tokens and pass them to the model as `idx_cond`. For example, with `block_size = 8`, the model uses the most recent 8 tokens. The position embedding provides `block_size` positions, which limits how many tokens the model can take at once.
+2. **Compute scores for the next token and adjust how likely each candidate is to be chosen.** In `self(idx_cond)`, `self` is the GPT model itself. The declaration [`class GPT(nn.Module)`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L118) inherits from PyTorch's `nn.Module`, so calling the model like a function runs `forward()` through the calling machinery of `nn.Module` (see the [PyTorch explanation](https://docs.pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.forward)).
+
+   The logits returned by [`forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L170-L193) for the last position give a score for each candidate for the next token. Divide these scores by `temperature`. For example, dividing by `0.5` doubles the score differences, concentrating probability on higher-scoring candidates. Dividing by `2.0` halves the differences, giving lower-scoring candidates a greater chance.
+
+3. **Narrow down the candidates.** With `top_k = 3`, keep the tokens with the top 3 scores. Setting lower scores to `−∞` gives those tokens probability 0 after softmax. The code uses the third-highest score as the cutoff, so tied candidates also remain. Skip this step when `top_k` is unspecified.
+4. **Draw one token according to the probabilities.** Softmax turns the scores into probabilities that sum to 1, and `torch.multinomial()` draws one token. For example, if three candidates have probabilities of `60%`, `30%`, and `10%`, each is selected with that probability. Even with the same input, the continuation can vary with the draw.
+5. **Append the chosen token and make the next prediction.** Add the selected `idx_next` to the end of `idx`. On the next iteration, use the most recent context, now including that token, to predict the following token. Repeat for `max_new_tokens` iterations.
 
 Dividing by the **temperature** $\tau$ makes each probability proportional to $\exp(z_v/\tau)$. With $\tau < 1$, differences between large logits are emphasized and the distribution becomes sharper; with $\tau > 1$, it becomes flatter. As $\tau$ approaches 0, only the token with the largest logit is chosen.
+
+The name “temperature” comes from the connection to the [Boltzmann distribution](https://web.stanford.edu/~peastman/statmech/statisticaldescription.html) in physics. A state with energy $E_v$ has probability $p_v = \exp(-E_v/(k_B T))/Z$, where $k_B$ is the Boltzmann constant and the denominator $Z$, called the **partition function**, makes the probabilities sum to 1. Identifying $E_v = -z_v$ and $k_B T = \tau$ gives the same form as softmax, whose denominator $\sum_u \exp(z_u/\tau)$ plays the role of the partition function. Lower temperatures concentrate probability on low-energy, high-scoring candidates; higher temperatures allow a wider range of candidates to be selected.
 
 **Top-k** removes low-probability candidates. Their logits become `−∞`, so their probabilities after softmax are 0. The defaults in [`sample.py`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/sample.py#L17-L18) are `temperature = 0.8` and `top_k = 200`. The character vocabulary has 65 entries, so with `min(top_k, V)` this setting removes no candidates.
 
@@ -197,6 +222,8 @@ The first line shows that `lm_head` and `wte` share one `Parameter`. The second 
 
 ## Next chapter
 
-The logits are dot products between the hidden state, normalized by the final LayerNorm, and each row of the weight shared with the embedding. Softmax turns them into probabilities, and generation adjusts the distribution with temperature and top-k before choosing one token. In the trained model, reading out the stream after each block showed predictions moving from the input character toward the next character.
+This chapter followed the path from the hidden state produced by the Transformer to the choice of the next token. The final LayerNorm and `lm_head` turn the hidden state into vocabulary scores called logits, and softmax converts those scores into probabilities. We saw that `lm_head` shares its weight with the input embedding: the same weight serves both to represent the input and to read out the output.
+
+During generation, temperature and top-k adjust the logits at the last position, and one token is drawn according to the probabilities produced by softmax.
 
 Training compares this probability distribution with the target token and summarizes how far off it is in one number. The next chapter covers that loss, cross entropy.

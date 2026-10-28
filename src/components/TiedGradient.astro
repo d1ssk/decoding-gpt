@@ -1,7 +1,7 @@
 ---
 import data from '../../public/site/data/nanogpt/backpropagation.json';
 import { backpropUi } from '../lib/backprop';
-import { charLabel, logScale } from '../lib/plot';
+import { charLabel } from '../lib/plot';
 import type { Language } from '../lib/site';
 
 interface Props {
@@ -9,156 +9,379 @@ interface Props {
 }
 const { lang } = Astro.props;
 const ui = backpropUi[lang];
-const voc = data.vocabulary;
-const { inputRowNorm, outputRowNorm, rowsInInput } = data.weightTying;
-const present = new Set(rowsInInput);
-const width = 640;
-const height = 300;
-const left = 44;
-const right = 8;
-const mid = 140;
-const half = 110;
-const band = (width - left - right) / voc.length;
-// Each half maps [1e-4, 10] to [0, half] pixels.
-const h = logScale([1e-4, 10], [0, half]);
-const bar = (value: number) => (value > 1e-4 ? h(value) : 0);
-const ticks = [1e-4, 1e-3, 1e-2, 1e-1, 1, 10];
-const tickLabel = (v: number) => (v >= 1 ? String(v) : v.toExponential(0));
+const { inputRowNorm, outputRowNorm } = data.weightTying;
+const rows = data.vocabulary.map((char, i) => ({
+  char: char === '\n' ? ui.tyingNewline : char === ' ' ? ui.tyingSpace : char,
+  count: data.ids.filter((id) => id === i).length,
+  input: inputRowNorm[i],
+  output: outputRowNorm[i],
+}));
+const initial = data.vocabulary.indexOf('n');
+const max = Math.ceil(Math.max(...inputRowNorm, ...outputRowNorm));
+const ticks = Array.from({ length: max + 1 }, (_, i) => i);
+const format = (value: number) => String(Number(value.toPrecision(3)));
+const selectedText = (i: number) =>
+  ui.tyingSelected
+    .replace('{char}', rows[i].char)
+    .replace('{count}', String(rows[i].count))
+    .replace('{total}', String(data.ids.length));
+const overview = ui.tyingOverview
+  .replace('{input}', String(inputRowNorm.filter((v) => v > 0).length))
+  .replace('{output}', String(outputRowNorm.filter((v) => v > 0).length))
+  .replaceAll('{total}', String(rows.length));
 ---
 
-<figure class="tied-gradient">
+<figure class="tied-gradient" data-tied-gradient>
   <figcaption>{ui.tyingCaption}</figcaption>
   <p class="note">{ui.tyingNote}</p>
-  <svg
-    viewBox={`0 0 ${width} ${height}`}
-    role="img"
-    aria-label={ui.tyingCaption}
-  >
-    {ticks.map((v) => (
-      <>
-        <path d={`M${left} ${mid - bar(v)}H${width - right}`} class="grid" />
-        <path
-          d={`M${left} ${mid + 4 + bar(v)}H${width - right}`}
-          class="grid"
-        />
-        <text x={left - 4} y={mid - bar(v) + 3} class="tick" text-anchor="end">
-          {tickLabel(v)}
-        </text>
-        {v > 1e-4 && (
-          <text
-            x={left - 4}
-            y={mid + 4 + bar(v) + 3}
-            class="tick"
-            text-anchor="end"
-          >
-            {tickLabel(v)}
-          </text>
-        )}
-      </>
+  <div class="comparison" aria-live="polite" aria-atomic="true">
+    <p class="selected" data-selected>
+      {selectedText(initial)}
+    </p>
+    <div class="axis" aria-hidden="true">
+      <span></span>
+      <div class="ticks">
+        {ticks.map((tick) => (
+          <span style={`left:${(tick / max) * 100}%`}>{tick}</span>
+        ))}
+      </div>
+      <span></span>
+    </div>
+    {(['input', 'output'] as const).map((side) => (
+      <div class={`comparison-row ${side}`}>
+        <div class="path-label">
+          <strong>{side === 'input' ? ui.inputPath : ui.outputPath}</strong>
+          <span>{side === 'input' ? ui.tyingInputUse : ui.tyingOutputUse}</span>
+        </div>
+        <div class="track" aria-hidden="true">
+          {ticks.map((tick) => (
+            <span class="grid" style={`left:${(tick / max) * 100}%`}></span>
+          ))}
+          <span
+            class="bar"
+            data-bar={side}
+            style={`width:${(rows[initial][side] / max) * 100}%`}
+          ></span>
+        </div>
+        <span class="value" data-value={side}>
+          {format(rows[initial][side])}
+        </span>
+      </div>
     ))}
-    {voc.map((char, i) => {
-      const x = left + i * band;
-      const on = present.has(i);
-      return (
-        <g class:list={{ present: on }}>
-          <title>{`${charLabel(char)}: lm_head ${outputRowNorm[i]}, wte ${inputRowNorm[i]}`}</title>
-          <rect
-            x={x + 0.8}
-            y={mid - bar(outputRowNorm[i])}
-            width={band - 1.6}
-            height={bar(outputRowNorm[i])}
-            class="output"
-          />
-          <rect
-            x={x + 0.8}
-            y={mid + 4}
-            width={band - 1.6}
-            height={bar(inputRowNorm[i])}
-            class="input"
-          />
-          <text
-            x={x + band / 2}
-            y={height - 18}
-            class="char"
-            text-anchor="middle"
-          >
-            {charLabel(char)}
-          </text>
-        </g>
-      );
-    })}
-    <text x={left + 4} y={14} class="label">
-      {ui.outputPath}
-    </text>
-    <text x={left + 4} y={height - 32} class="label">
-      {ui.inputPath}
-    </text>
-  </svg>
-  <p class="legend">
-    <span class="key present-key"></span>
-    {ui.rowsInInput}
-  </p>
+    <p class="axis-label">{ui.tyingAxis}</p>
+    <div class="explanations">
+      <p class="explanation" data-explanation="present" aria-hidden="false">
+        {ui.tyingPresentExplanation}
+      </p>
+      <p class="explanation" data-explanation="absent" aria-hidden="true">
+        {ui.tyingAbsentExplanation}
+      </p>
+    </div>
+  </div>
+  <div class="character-picker">
+    <p class="picker-hint">{ui.tyingCharacterHint}</p>
+    <div class="characters" role="group" aria-label={ui.tyingCharacter}>
+      {rows.map((row, i) => (
+        <button
+          type="button"
+          data-character={i}
+          class:list={{ present: row.count > 0 }}
+          aria-label={row.char}
+          title={row.char}
+          aria-pressed={i === initial ? 'true' : 'false'}
+          disabled
+        >
+          {charLabel(data.vocabulary[i])}
+        </button>
+      ))}
+    </div>
+  </div>
+  <p class="overview">{overview}</p>
+  <p class="note">{ui.tyingSumNote}</p>
+  <details>
+    <summary>{ui.tyingNormDefinition}</summary>
+    <p class="note">{ui.tyingNormExplanation}</p>
+  </details>
+  <details>
+    <summary>{ui.tyingAllRows}</summary>
+    <div
+      class="table-scroll"
+      role="region"
+      aria-label={ui.tyingAllRows}
+      tabindex="0"
+    >
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">{ui.tyingRow}</th>
+            <th scope="col">{ui.tyingOccurrences}</th>
+            <th scope="col">{ui.inputPath}</th>
+            <th scope="col">{ui.outputPath}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr>
+              <th scope="row">{row.char}</th>
+              <td>{row.count}</td>
+              <td>{row.input}</td>
+              <td>{row.output}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  <noscript>
+    <p class="note">{ui.noScript}</p>
+  </noscript>
+  <script
+    type="application/json"
+    data-chart-data
+    set:html={JSON.stringify({
+      rows,
+      max,
+      total: data.ids.length,
+      selected: ui.tyingSelected,
+    }).replaceAll('<', '\\u003c')}
+  ></script>
 </figure>
+
+<script>
+  document
+    .querySelectorAll<HTMLElement>('[data-tied-gradient]')
+    .forEach((root) => {
+      const data = JSON.parse(
+        root.querySelector('[data-chart-data]')!.textContent!,
+      ) as {
+        rows: { char: string; count: number; input: number; output: number }[];
+        max: number;
+        total: number;
+        selected: string;
+      };
+      const buttons =
+        root.querySelectorAll<HTMLButtonElement>('[data-character]');
+      function update(index: number) {
+        const row = data.rows[index];
+        root.querySelector('[data-selected]')!.textContent = data.selected
+          .replace('{char}', row.char)
+          .replace('{count}', String(row.count))
+          .replace('{total}', String(data.total));
+        for (const side of ['input', 'output'] as const) {
+          root.querySelector<HTMLElement>(`[data-bar="${side}"]`)!.style.width =
+            `${(row[side] / data.max) * 100}%`;
+          root.querySelector(`[data-value="${side}"]`)!.textContent = String(
+            Number(row[side].toPrecision(3)),
+          );
+        }
+        root
+          .querySelectorAll<HTMLElement>('[data-explanation]')
+          .forEach((text) => {
+            const visible =
+              text.dataset.explanation === (row.count ? 'present' : 'absent');
+            text.setAttribute('aria-hidden', String(!visible));
+          });
+        buttons.forEach((button) =>
+          button.setAttribute(
+            'aria-pressed',
+            String(Number(button.dataset.character) === index),
+          ),
+        );
+      }
+      buttons.forEach((button) => {
+        button.disabled = false;
+        button.addEventListener('click', () =>
+          update(Number(button.dataset.character)),
+        );
+      });
+    });
+</script>
 
 <style>
   .tied-gradient {
+    --input-color: #a05a20;
+    --output-color: #276b92;
     border-block: 1px solid var(--line-strong);
     margin: 2rem 0;
     padding: 1.25rem 0;
   }
   figcaption {
     font-weight: 600;
-    margin-bottom: 0.5rem;
   }
-  .note,
-  .legend {
+  .tied-gradient .note {
     color: var(--ink-secondary);
-    font-size: 0.8rem;
+    font-size: 0.82rem;
+    margin: 0.7rem 0 1rem;
   }
-  svg {
-    display: block;
-    height: auto;
-    width: 100%;
+  .character-picker {
+    margin: 1rem 0;
   }
-  .grid {
-    stroke: var(--line);
-    stroke-width: 0.6;
+  .tied-gradient .picker-hint {
+    margin: 0 0 0.5rem;
+    color: var(--ink-secondary);
+    font-size: 0.75rem;
   }
-  .tick,
-  .char {
-    fill: var(--ink-muted);
-    font-family: var(--font-mono);
-    font-size: 8px;
+  .characters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
   }
-  .label {
-    fill: var(--ink-secondary);
-    font-size: 11px;
+  .characters button {
+    width: 1.8rem;
+    height: 1.8rem;
+    padding: 0;
+    font: 0.8rem var(--font-mono);
+    color: var(--ink-secondary);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    cursor: pointer;
   }
-  .output {
-    fill: #276b92;
-    fill-opacity: 0.35;
-  }
-  .input {
-    fill: #a05a20;
-    fill-opacity: 0.35;
-  }
-  .present .output,
-  .present .input {
-    fill-opacity: 0.9;
-  }
-  .present .char {
-    fill: var(--ink);
+  .characters .present {
+    color: var(--ink);
     font-weight: 700;
   }
-  .legend {
-    align-items: center;
-    display: flex;
-    gap: 0.4rem;
+  .characters button:hover {
+    background: var(--paper-subtle);
+    border-color: var(--line-strong);
   }
-  .key {
-    background: rgba(39, 107, 146, 0.9);
-    display: inline-block;
-    height: 0.7rem;
-    width: 1.2rem;
+  .characters button[aria-pressed='true'] {
+    border-color: var(--accent);
+    background: var(--accent-light);
+  }
+  :is(button, summary, .table-scroll):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+  .tied-gradient .selected {
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin: 1.2rem 0;
+  }
+  .axis,
+  .comparison-row {
+    display: grid;
+    grid-template-columns: 9.5rem minmax(0, 1fr) 5rem;
+    gap: 0.8rem;
+    align-items: center;
+  }
+  .ticks {
+    position: relative;
+    height: 1.5rem;
+    font: 0.75rem var(--font-mono);
+    color: var(--ink-secondary);
+  }
+  .ticks span {
+    position: absolute;
+    transform: translateX(-50%);
+  }
+  .comparison-row {
+    min-height: 4rem;
+  }
+  .path-label strong {
+    display: block;
+    font-size: 0.9rem;
+  }
+  .path-label span {
+    display: block;
+    font-size: 0.72rem;
+    line-height: 1.4;
+    color: var(--ink-secondary);
+  }
+  .track {
+    position: relative;
+    height: 4rem;
+    display: flex;
+    align-items: center;
+  }
+  .grid {
+    position: absolute;
+    height: 100%;
+    border-left: 1px solid var(--line);
+  }
+  .grid:first-child {
+    border-color: var(--line-strong);
+  }
+  .bar {
+    position: relative;
+    display: block;
+    height: 1rem;
+    background: var(--input-color);
+  }
+  .output .bar {
+    background: var(--output-color);
+  }
+  .value {
+    font: 0.85rem var(--font-mono);
+    text-align: right;
+  }
+  .tied-gradient .axis-label {
+    margin: 0.5rem 5.8rem 0 10.3rem;
+    text-align: center;
+    color: var(--ink-secondary);
+    font-size: 0.72rem;
+  }
+  .explanations {
+    display: grid;
+    margin: 1rem 0;
+  }
+  .tied-gradient .explanation {
+    grid-area: 1 / 1;
+    align-self: start;
+    font-size: 0.88rem;
+    margin: 0;
+  }
+  .explanation[aria-hidden='true'] {
+    visibility: hidden;
+  }
+  .tied-gradient .overview {
+    border-top: 1px solid var(--line);
+    padding-top: 1rem;
+    font-size: 0.85rem;
+    margin: 1rem 0;
+  }
+  details {
+    margin-top: 0.7rem;
+    font-size: 0.82rem;
+  }
+  summary {
+    cursor: pointer;
+  }
+  .table-scroll {
+    overflow-x: auto;
+    margin-top: 0.8rem;
+    max-height: 24rem;
+  }
+  .table-scroll table {
+    width: 100%;
+    font-size: 0.8rem;
+    margin: 0;
+  }
+  .table-scroll :is(td, th) {
+    padding: 0.45rem 0.6rem;
+  }
+  .table-scroll thead th {
+    position: sticky;
+    top: 0;
+    background: var(--paper);
+    font: inherit;
+  }
+  .table-scroll td {
+    font-family: var(--font-mono);
+    text-align: right;
+    white-space: nowrap;
+  }
+  @media (max-width: 40rem) {
+    .axis,
+    .comparison-row {
+      grid-template-columns: 6.5rem minmax(0, 1fr) 4.8rem;
+      gap: 0.5rem;
+    }
+    .tied-gradient .axis-label {
+      margin-inline: 7rem 5.3rem;
+    }
+    .value {
+      font-size: 0.78rem;
+    }
   }
 </style>

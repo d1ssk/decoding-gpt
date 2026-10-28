@@ -33,10 +33,10 @@ def cosine(weight):
 
 
 def pca(weight, orient):
-    """Two leading principal components; `orient` fixes the arbitrary signs."""
+    """Leading principal components; `orient` fixes the arbitrary signs."""
     centered = weight - weight.mean(dim=0)
     _, s, vh = torch.linalg.svd(centered, full_matrices=False)
-    coords = centered @ vh[:2].T
+    coords = centered @ vh[:len(orient)].T
     for k, (row, sign) in enumerate(orient):
         if torch.sign(coords[row, k]) != sign:
             coords[:, k] = -coords[:, k]
@@ -68,8 +68,8 @@ def run(nanogpt_dir):
         wpe = model.transformer.wpe.weight.detach()
         assert model.lm_head.weight is model.transformer.wte.weight
         sim, pos_sim = cosine(wte), cosine(wpe)
-        # Space on the negative side of PC1, '.' on the positive side of PC2.
-        coords, ratio = pca(wte, [(vocab.index(" "), -1), (vocab.index("."), 1)])
+        # Fix arbitrary signs: space negative PC1, period positive PC2, a positive PC3.
+        coords, ratio = pca(wte, [(vocab.index(" "), -1), (vocab.index("."), 1), (vocab.index("a"), 1)])
         pos_coords, pos_ratio = pca(wpe, [(0, -1), (0, 1)])
         groups = {name: [i for i, c in enumerate(vocab) if char_class(c) == name]
                   for name in ("vowel", "consonant", "upper", "symbol", "space")}
@@ -80,7 +80,7 @@ def run(nanogpt_dir):
             wteStd=round(wte.std().item(), 4), wpeStd=round(wpe.std().item(), 4),
             wteRowNorm=round(wte.norm(dim=1).mean().item(), 4),
             wpeRowNorm=round(wpe.norm(dim=1).mean().item(), 4),
-            tokenPca=[[round(x, 4), round(y, 4)] for x, y in coords.tolist()],
+            tokenPca=[[round(v, 4) for v in row] for row in coords.tolist()],
             # Pearson correlation of PC1 with log(training count + 1) per character.
             pc1LogCountCorrelation=round(torch.corrcoef(
                 torch.stack([coords[:, 0], log_counts]))[0, 1].item(), 3),
@@ -104,7 +104,7 @@ def run(nanogpt_dir):
         upstreamCommit=COMMIT, modelSha256=MODEL_SHA256, torchVersion=torch.__version__,
         modelArgs=saved["model_args"], vocabulary=vocab,
         classes=[char_class(c) for c in vocab],
-        pcaOrientation="space has negative PC1 and '.' positive PC2; position 0 negative PC1",
+        pcaOrientation="space has negative PC1, '.' positive PC2, and 'a' positive PC3; position 0 negative PC1",
         cosineScale="per mille", stages=stages,
         verification=dict(weightTying=True))
 

@@ -1,0 +1,346 @@
+---
+import {
+  activationPlot as plot,
+  activationUi,
+  activationValues,
+  activationViews,
+} from '../lib/activation-comparison';
+import { linearScale, linePath } from '../lib/plot';
+import type { Language } from '../lib/site';
+
+interface Props {
+  lang: Language;
+}
+const { lang } = Astro.props;
+const ui = activationUi[lang];
+const initial = 1;
+const values = activationValues(initial);
+const views = ['full', 'near'] as const;
+---
+
+<figure class="activation-comparison" data-activation-comparison>
+  <figcaption>{ui.caption}</figcaption>
+  <p class="legend">
+    <span>
+      <i class="key gelu-key" aria-hidden="true" />
+      GELU · nanoGPT
+    </span>
+    <span>
+      <i class="key relu-key" aria-hidden="true" />
+      ReLU² · nanochat
+    </span>
+  </p>
+  <fieldset>
+    <legend>{ui.view}</legend>
+    {views.map((view) => (
+      <label>
+        <input
+          type="radio"
+          name={`activation-view-${lang}`}
+          value={view}
+          checked={view === 'full'}
+          disabled
+        />
+        {ui.views[view]}
+      </label>
+    ))}
+  </fieldset>
+  {views.map((view) => {
+    const cfg = activationViews[view];
+    const x = linearScale(cfg.xDomain, [plot.left, plot.right]);
+    const y = linearScale(cfg.yDomain, [plot.bottom, plot.top]);
+    const inputs = Array.from(
+      { length: 301 },
+      (_, i) => cfg.xDomain[0] + ((cfg.xDomain[1] - cfg.xDomain[0]) * i) / 300,
+    );
+    const curve = (key: keyof typeof values) =>
+      linePath(
+        inputs.map((v) => [v, activationValues(v)[key]]),
+        x,
+        y,
+      );
+    return (
+      <div data-activation-view={view} hidden={view !== 'full'}>
+        <svg
+          viewBox={`0 0 ${plot.width} ${plot.height}`}
+          role="img"
+          aria-label={`${ui.caption}: ${ui.views[view]}`}
+        >
+          <desc>{ui.note}</desc>
+          {cfg.xTicks.map((v) => (
+            <>
+              <path
+                d={`M${x(v)} ${plot.top}V${plot.bottom}`}
+                class:list={['grid', { zero: v === 0 }]}
+              />
+              <text
+                x={x(v)}
+                y={plot.bottom + 19}
+                text-anchor="middle"
+                class="tick"
+              >
+                {v}
+              </text>
+            </>
+          ))}
+          {cfg.yTicks.map((v) => (
+            <>
+              <path
+                d={`M${plot.left} ${y(v)}H${plot.right}`}
+                class:list={['grid', { zero: v === 0 }]}
+              />
+              <text
+                x={plot.left - 8}
+                y={y(v) + 4}
+                text-anchor="end"
+                class="tick"
+              >
+                {v}
+              </text>
+            </>
+          ))}
+          <text x={plot.left} y="16" class="axis-label">
+            {ui.output}
+          </text>
+          <text
+            x={plot.right}
+            y={plot.height - 3}
+            text-anchor="end"
+            class="axis-label"
+          >
+            {ui.input}
+          </text>
+          <path
+            data-cursor
+            d={`M${x(initial)} ${plot.top}V${plot.bottom}`}
+            class="cursor"
+          />
+          <path d={curve('gelu')} class="curve gelu" />
+          <path d={curve('reluSquared')} class="curve relu" />
+          <circle
+            data-gelu
+            cx={x(initial)}
+            cy={y(values.gelu)}
+            r="4"
+            class="gelu-point"
+          />
+          <rect
+            data-relu
+            x={x(initial) - 4}
+            y={y(values.reluSquared) - 4}
+            width="8"
+            height="8"
+            class="relu-point"
+          />
+        </svg>
+      </div>
+    );
+  })}
+  <label class="input-control">
+    <span>
+      {ui.input}: <output data-input-value>{initial.toFixed(2)}</output>
+    </span>
+    <input
+      data-input
+      type="range"
+      min="-3"
+      max="3"
+      step="0.05"
+      value={initial}
+      disabled
+    />
+  </label>
+  <div class="readout" aria-live="polite">
+    <span>
+      GELU(x) = <output data-gelu-value>{values.gelu.toFixed(4)}</output>
+    </span>
+    <span>
+      ReLU²(x) ={' '}
+      <output data-relu-value>{values.reluSquared.toFixed(4)}</output>
+    </span>
+  </div>
+  <p class="note">{ui.note}</p>
+</figure>
+
+<script>
+  import {
+    activationPlot as plot,
+    activationValues,
+    activationViews,
+  } from '../lib/activation-comparison';
+  import { linearScale } from '../lib/plot';
+
+  document
+    .querySelectorAll<HTMLElement>('[data-activation-comparison]')
+    .forEach((root) => {
+      const input = root.querySelector<HTMLInputElement>('[data-input]')!;
+      const panels = root.querySelectorAll<HTMLElement>(
+        '[data-activation-view]',
+      );
+      const render = () => {
+        const value = Number(input.value);
+        const values = activationValues(value);
+        root.querySelector('[data-input-value]')!.textContent =
+          value.toFixed(2);
+        root.querySelector('[data-gelu-value]')!.textContent =
+          values.gelu.toFixed(4);
+        root.querySelector('[data-relu-value]')!.textContent =
+          values.reluSquared.toFixed(4);
+        panels.forEach((panel) => {
+          const cfg =
+            activationViews[
+              panel.dataset.activationView as keyof typeof activationViews
+            ];
+          const x = linearScale(cfg.xDomain, [plot.left, plot.right])(value);
+          const y = linearScale(cfg.yDomain, [plot.bottom, plot.top]);
+          panel
+            .querySelector('[data-cursor]')!
+            .setAttribute('d', `M${x} ${plot.top}V${plot.bottom}`);
+          const geluPoint = panel.querySelector('[data-gelu]')!;
+          geluPoint.setAttribute('cx', String(x));
+          geluPoint.setAttribute('cy', String(y(values.gelu)));
+          const reluPoint = panel.querySelector('[data-relu]')!;
+          reluPoint.setAttribute('x', String(x - 4));
+          reluPoint.setAttribute('y', String(y(values.reluSquared) - 4));
+        });
+      };
+      input.disabled = false;
+      input.addEventListener('input', render);
+      root
+        .querySelectorAll<HTMLInputElement>('input[type="radio"]')
+        .forEach((radio) => {
+          radio.disabled = false;
+          radio.addEventListener('change', () => {
+            const view = radio.value as keyof typeof activationViews;
+            const [min, max] = activationViews[view].xDomain;
+            const value = Math.max(min, Math.min(max, Number(input.value)));
+            input.min = String(min);
+            input.max = String(max);
+            input.value = String(value);
+            panels.forEach((panel) =>
+              panel.toggleAttribute(
+                'hidden',
+                panel.dataset.activationView !== view,
+              ),
+            );
+            render();
+          });
+        });
+    });
+</script>
+
+<style>
+  .activation-comparison {
+    border-block: 1px solid var(--line-strong);
+    margin: 2rem 0;
+    padding: 1.25rem 0;
+  }
+  figcaption {
+    font-weight: 600;
+  }
+  .legend,
+  fieldset,
+  .readout {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.2rem;
+    font-size: 0.85rem;
+  }
+  .legend span,
+  fieldset label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .key {
+    width: 1.6rem;
+    border-top: 3px solid #276b92;
+  }
+  .relu-key {
+    border-color: #a05a20;
+    border-top-style: dashed;
+  }
+  fieldset {
+    border: 0;
+    padding: 0;
+    margin: 0 0 0.8rem;
+  }
+  legend {
+    float: left;
+    margin-right: 0.8rem;
+  }
+  svg {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+  [hidden] {
+    display: none;
+  }
+  .grid {
+    fill: none;
+    stroke: var(--line);
+    stroke-width: 0.7;
+  }
+  .zero {
+    stroke: var(--ink-muted);
+    stroke-width: 1;
+  }
+  .tick,
+  .axis-label {
+    fill: var(--ink-secondary);
+    font-size: 12px;
+  }
+  .tick,
+  output {
+    font-family: var(--font-mono);
+  }
+  .curve {
+    fill: none;
+    stroke-width: 2.5;
+  }
+  .gelu {
+    stroke: #276b92;
+  }
+  .relu {
+    stroke: #a05a20;
+    stroke-dasharray: 7 4;
+  }
+  .gelu-point {
+    fill: #276b92;
+  }
+  .relu-point {
+    fill: var(--paper);
+    stroke: #a05a20;
+    stroke-width: 2;
+  }
+  .cursor {
+    stroke: var(--ink-muted);
+    stroke-width: 1;
+    stroke-dasharray: 2 4;
+  }
+  .input-control {
+    display: grid;
+    gap: 0.5rem;
+    margin: 1rem 0;
+    font-size: 0.85rem;
+  }
+  .input-control input {
+    width: 100%;
+    margin: 0;
+  }
+  .readout output {
+    display: inline-block;
+    min-width: 7ch;
+  }
+  .note {
+    color: var(--ink-secondary);
+    font-size: 0.8rem;
+  }
+  @media (max-width: 480px) {
+    .tick,
+    .axis-label {
+      font-size: 17px;
+    }
+  }
+</style>

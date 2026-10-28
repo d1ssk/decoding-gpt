@@ -1,0 +1,47 @@
+.lf-input-number,
+.lf-input-label,
+.lf-result {
+  transition:
+    transform var(--row-motion-duration) cubic-bezier(0.35, 0, 0.2, 1),
+    opacity 180ms;
+}
+.lf-original-heading,
+.lf-original-bracket,
+.lf-operators {
+  transition: opacity 180ms;
+}
+.lf-input-label text {
+  font: 600 19px var(--font-mono);
+  fill: var(--nm-blue);
+}
+.lf-row-index {
+  font: 12px var(--font-mono);
+  fill: var(--ink-muted);
+}
+.lf-multiply,
+.lf-plus {
+  font: 18px var(--font-mono);
+  fill: var(--ink-secondary);
+}
+.lf-result {
+  pointer-events: none;
+}
+.lf-result rect {
+  fill: var(--accent-light);
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.lf-result text {
+  font: 24px var(--font-mono);
+  fill: var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .lf-input-number,
+  .lf-input-label,
+  .lf-result,
+  .lf-original-heading,
+  .lf-original-bracket,
+  .lf-operators {
+    transition: none;
+  }
+}

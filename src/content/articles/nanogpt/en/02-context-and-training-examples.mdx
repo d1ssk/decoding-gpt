@@ -173,4 +173,4 @@ The seed here is fixed at 0. `train.py` draws its first batch after initializing
 
 As we have seen, a training batch pairs inputs `X`, sliced from a long token ID sequence, with targets `Y`, shifted one token ahead. Both are two-dimensional arrays of shape `[B, T]`, where `B = batch_size` and `T = block_size`. The model uses the token sequence through each position to predict the next token.
 
-The next chapter follows how each token ID in `X` is converted to an embedding vector and combined with an embedding representing its position. With embedding dimension `C`, this produces an array of shape `[B, T, C]`.
+[The next chapter](../03-embeddings-and-position/) follows how each token ID in `X` is converted to an embedding vector and combined with an embedding representing its position. With embedding dimension `C`, this produces an array of shape `[B, T, C]`.

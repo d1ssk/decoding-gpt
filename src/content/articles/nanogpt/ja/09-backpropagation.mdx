@@ -17,7 +17,7 @@ experimentId: nanogpt-09-backpropagation
 ---
 
 import CrossEntropyToy from '../../../../components/CrossEntropyToy.astro';
-import GradientFlow from '../../../../components/GradientFlow.astro';
+import BackpropagationToy from '../../../../components/backpropagation/BackpropagationToy';
 import TiedGradient from '../../../../components/TiedGradient.astro';
 import GradientNorms from '../../../../components/GradientNorms.astro';
 
@@ -43,6 +43,8 @@ X, Y = get_batch('train')
 scaler.scale(loss).backward()
 ```
 
+`X, Y = get_batch('train')` は、次の学習データを先に準備して待ち時間を減らす工夫です。この章で勾配の計算を追う際は、この行を読み飛ばし、`model(X, Y)` で求めた `loss` から `backward()` へ進む流れに注目してください。
+
 `scaler` は float16 で学習する場合に損失を拡大する仕組みで、CPU で float32 を使う第 11 章の設定では何もしません。したがって、実際に行われるのは `loss.backward()` です。この呼び出しが終わると、モデルのすべての `Parameter` について、同じ形状の勾配が `.grad` に入ります。
 
 ## 連鎖律で逆向きにたどる
@@ -55,7 +57,7 @@ $$
 \frac{\partial\mathcal{L}}{\partial u_i} = \sum_j \frac{\partial v_j}{\partial u_i}\,\frac{\partial\mathcal{L}}{\partial v_j}
 $$
 
-各演算は、後ろから届いた勾配 $\partial\mathcal{L}/\partial\boldsymbol{v}$ と、自分の入出力の関係 $\partial v_j/\partial u_i$ だけを使います。出口の損失から入口の埋め込みまで、この計算を順に繰り返すので、**誤差逆伝播（backpropagation）**と呼ばれます。逆向きの計算量は forward のおよそ 2 倍で、重みの数だけ forward を繰り返す必要はありません。
+各演算は、後ろから届いた勾配 $\partial\mathcal{L}/\partial\boldsymbol{v}$ と、自分の入出力の関係 $\partial v_j/\partial u_i$ だけを使います。出口の損失から入口の埋め込みまで、この計算を順に繰り返すので、**誤差逆伝播（backpropagation** と呼ばれます。逆向きの計算量は forward のおよそ 2 倍で、重みの数だけ forward を繰り返す必要はありません。
 
 ## 出発点：logits の勾配
 
@@ -73,9 +75,98 @@ $$
 
 ## 層を逆にたどる
 
-logits の勾配は、`lm_head`、`ln_f`、各 block を逆順に通って埋め込みまで届きます。代表的な演算の規則を確認します。
+前節では、損失の logits に対する勾配を求めました。**逆伝播の目的は、この勾配を出発点として計算を逆にたどり、モデルのすべての学習可能パラメータに対する損失の勾配を求めることです。** 具体的には、`lm_head`、`ln_f`、各 Transformer block、埋め込み層の順に処理していきます。
 
-**線形変換** $\boldsymbol{y} = W\boldsymbol{x}$ では、入力への勾配は $W^\top\,\partial\mathcal{L}/\partial\boldsymbol{y}$、重みへの勾配は $\partial\mathcal{L}/\partial\boldsymbol{y}$ と $\boldsymbol{x}$ の外積です。同じ重みを全バッチ・全位置で使うので、**重みの勾配は `B·T` 個の位置の外積の和**になります。
+その仕組みは、**各演算で、その出力に対する損失の勾配を受け取り、パラメータに対する勾配を求めるとともに、入力に対する勾配へ変換して手前に渡す**というものです。たとえば、演算を $\boldsymbol{y}=f(\boldsymbol{x};\theta)$ とすると、下流から $\partial\mathcal{L}/\partial\boldsymbol{y}$ が渡されます。これに演算 $f$ 自体の微分を連鎖律によって組み合わせれば、パラメータの勾配 $\partial\mathcal{L}/\partial\theta$ と、さらに逆伝播を続けるための $\partial\mathcal{L}/\partial\boldsymbol{x}$ が求まります。**下流の計算が損失に与える影響は、受け取った勾配にすでに集約されている**ため、各演算では自分自身の微分だけを考えればよいのです。
+
+計算に必要なものは次の3つです。
+
+- **出力に対する損失の勾配**：下流から渡される値。
+- **forward 時の値**：パラメータや、微分に必要な入力・中間値。必要に応じて保存または再計算します。
+- **演算の微分規則**：出力の変化と入力・パラメータの変化を結びつける関係。
+
+たとえば $y=wx$ なら、下流から渡された勾配を $g=\partial\mathcal{L}/\partial y$ として、
+
+$$
+\frac{\partial\mathcal{L}}{\partial w}=gx,
+\qquad
+\frac{\partial\mathcal{L}}{\partial x}=gw
+$$
+
+となります。左側が求めたいパラメータの勾配、右側がさらに手前へ伝えるための勾配です。このように、**出力への勾配と forward 時の値があれば、局所的な微分規則に従う数値計算だけで勾配を求められます。** 重みを少しずつ変えて損失を測り直す必要はありません。
+
+各演算で求めたパラメータの勾配は蓄積し、入力への勾配はさらに手前の演算へ渡します。複数の経路から勾配が届く場合は、それらを足し合わせます。こうして計算全体を逆にたどり、すべての学習可能パラメータの勾配を求めます。逆伝播の途中ではパラメータを変更せず、更新は逆伝播が完了してから行います。
+
+### 線形変換の入力と重みへの勾配
+
+まず、先ほどの $y=wx$ を配列に広げた線形変換 $\boldsymbol{y}=W\boldsymbol{x}$ を考えます。出力に対する損失の勾配を $\boldsymbol{g}$ とすると、forward 時の入力 $\boldsymbol{x}$ を使って、重みに対する勾配 $\boldsymbol{g}\boldsymbol{x}^\top$ を求められます。同時に、重み $W$ を使って、手前の演算へ渡す入力の勾配 $W^\top\boldsymbol{g}$ を求めます。同じ重みを使うバッチ内の全位置について寄与を足し合わせると、この線形変換による重みの勾配が得られます。
+
+<details>
+<summary>偏微分の計算：線形変換の入力と重み</summary>
+
+まず 1 つの位置での **線形変換** $\boldsymbol{y} = W\boldsymbol{x}$ を考えます。入力の要素数を $I$、出力の要素数を $O$ とすると、重み $W$ は形状 `[O, I]` の 2 次元配列で、各出力は次のように計算されます。ここではバイアスを省略します。
+
+$$
+y_i = \sum_{j=1}^{I} W_{ij}x_j
+\qquad (i=1,\dots,O)
+$$
+
+下流から受け取った、出力に対する損失の勾配を $g_i = \partial\mathcal{L}/\partial y_i$ と書きます。入力 $x_j$ は各出力 $y_i$ に影響し、その偏微分は $\partial y_i/\partial x_j = W_{ij}$ です。連鎖律で全出力を経由する影響を足すと、
+
+$$
+\frac{\partial\mathcal{L}}{\partial x_j}
+= \sum_{i=1}^{O}
+\frac{\partial\mathcal{L}}{\partial y_i}
+\frac{\partial y_i}{\partial x_j}
+= \sum_{i=1}^{O} g_i W_{ij}
+$$
+
+となります。これを全入力要素についてまとめたものが、$\partial\mathcal{L}/\partial\boldsymbol{x} = W^\top\boldsymbol{g}$ です。
+
+次に、重みの 1 要素 $W_{ij}$ を考えます。この重みは出力 $y_i$ の計算で $x_j$ に掛かっているので、
+
+$$
+\frac{\partial y_k}{\partial W_{ij}}
+= \begin{cases}
+x_j & (k=i) \\
+0 & (k\ne i)
+\end{cases}
+$$
+
+です。連鎖律に代入すると、$k=i$ の項だけが残ります。
+
+$$
+\frac{\partial\mathcal{L}}{\partial W_{ij}}
+= \sum_{k=1}^{O}
+\frac{\partial\mathcal{L}}{\partial y_k}
+\frac{\partial y_k}{\partial W_{ij}}
+= g_i x_j
+$$
+
+つまり、**出力要素 $i$ に対する損失の勾配と、forward 時の入力要素 $j$ の積**です。すべての $(i,j)$ についてこの積を並べた形状 `[O, I]` の配列 $\boldsymbol{g}\boldsymbol{x}^\top$ を、2 つのベクトルの**外積**と呼びます。
+
+実際には、同じ $W$ をバッチ内の全位置で使います。サンプル $b$、位置 $t$ の出力を $y_{b,t,i} = \sum_j W_{ij}x_{b,t,j}$ とすると、1 つの $W_{ij}$ が各位置の出力に影響するため、連鎖律にはバッチと位置についての和も入ります。
+
+$$
+\begin{aligned}
+\frac{\partial\mathcal{L}}{\partial W_{ij}}
+&= \sum_{b=1}^{B}\sum_{t=1}^{T}\sum_{k=1}^{O}
+\frac{\partial\mathcal{L}}{\partial y_{b,t,k}}
+\frac{\partial y_{b,t,k}}{\partial W_{ij}} \\
+&= \sum_{b=1}^{B}\sum_{t=1}^{T} g_{b,t,i}\,x_{b,t,j}
+\end{aligned}
+$$
+
+つまり、**重みの勾配は `B·T` 個の位置で求めた外積の和**です。各位置の形状 `[O, I]` の配列を要素ごとに足します。$\mathcal{L}$ が平均損失なら、平均を取る係数は $g_{b,t,i} = \partial\mathcal{L}/\partial y_{b,t,i}$ に含まれているので、ここでさらに `B·T` で割る必要はありません。この式は、この線形変換を通じた寄与を表します。同じ重みを別の演算でも使う場合は、その経路からの寄与も足します。
+
+</details>
+
+### 残差接続
+
+残差接続 $\boldsymbol{y}=\boldsymbol{x}+f(\boldsymbol{x};\theta)$ では、入力 $\boldsymbol{x}$ を直接足す計算と、$f$ を通じた計算の両方が出力に影響します。加算はそれぞれの入力に対する微分が 1 なので、出力に対する損失の勾配を、そのまま両方の計算に使います。$f$ では、この勾配からパラメータ $\theta$ と入力 $\boldsymbol{x}$ に対する勾配を求めます。**手前の演算へ渡す $\boldsymbol{x}$ の勾配は、直接足す計算の分と、$f$ を通じて求めた分の和**です。
+
+<details>
+<summary>偏微分の計算：残差接続と MLP・LayerNorm</summary>
 
 **残差接続** $\boldsymbol{x}_{l+1} = \boldsymbol{x}_l + f(\boldsymbol{x}_l)$ では、
 
@@ -85,23 +176,161 @@ $$
 + \left(\frac{\partial f}{\partial\boldsymbol{x}_l}\right)^{\!\top}\frac{\partial\mathcal{L}}{\partial\boldsymbol{x}_{l+1}}
 $$
 
-となります。第 1 項は、サブレイヤーを経由せずにそのまま前の層へ届く勾配です。第 6 章で述べた残差ストリームの利点は、この項に対応します。
+となります。第 1 項は、入力を直接足す計算による寄与です。出力に対する勾配がそのまま入力の勾配の一部になることが、第 6 章で述べた残差ストリームの利点に対応します。
 
-**attention** では、位置 `t` の出力が自分自身とそれ以前の位置の value の重み付き和でした。逆向きには、位置 `t` の勾配が、参照の重みに応じて以前の位置へ分配されます。causal mask で重みが 0 の未来の位置には、勾配は届きません。
+では、$\partial f/\partial\boldsymbol{x}_l$ はどう計算するのでしょうか。nanoGPT の MLP 側では、$f$ は LayerNorm、2 つの線形変換、GELU を組み合わせた関数です。dropout を省略し、入力を $\boldsymbol{x}$ と書くと、
 
-次の図は、第 11 章で学習したモデルで、1 つの位置の損失 $\ell_t$ を各位置の埋め込みの和 $\boldsymbol{x}$（`wte` と `wpe` の和）で微分した勾配のノルムです。文字を選ぶと、その位置で次の文字を予測する損失についての勾配を、文字の背景の濃さで表示します。取り消し線の付いた文字は位置 `t` より後で、勾配はすべて 0 です。
+$$
+\boldsymbol{u}=\operatorname{LN}(\boldsymbol{x}),\qquad
+\boldsymbol{a}=W_1\boldsymbol{u}+\boldsymbol{b}_1,\qquad
+\boldsymbol{h}=\operatorname{GELU}(\boldsymbol{a}),\qquad
+f(\boldsymbol{x})=W_2\boldsymbol{h}+\boldsymbol{b}_2
+$$
 
-<GradientFlow lang="ja" />
+です。したがって、$f_i$ の入力要素 $x_j$ による偏微分も、各演算の微分を連鎖律でつなげて求めます。
 
-初期表示の位置 61 は、`morrow` の 2 つ目の `o` から `w` を予測する損失です。勾配のノルムが最も大きいのは単語の先頭の `m`（位置 57、`26.1`）と直前の `r`（位置 60、`24.4`）で、自分自身の位置 61（`16.4`）より大きくなっています。予測に使われた情報が、勾配を通してどの位置の入力に結び付いているかがわかります。
+$$
+\frac{\partial f_i}{\partial x_j}
+= \sum_r\sum_k
+(W_2)_{ir}\,\operatorname{GELU}'(a_r)\,(W_1)_{rk}
+\frac{\partial u_k}{\partial x_j}
+$$
 
-勾配のノルムが 1 より大きいのは、埋め込みの値が小さく（第 6 章で見た位置 52 では標準偏差 `0.073`）、LayerNorm がその小さな標準偏差で割るためです。
+LayerNorm の微分も具体的に書けます。入力の要素数を $C$、平均を $\mu$、分散を $\sigma^2$、学習する倍率を $\gamma_k$ とし、$u_k=\gamma_k(x_k-\mu)/\sqrt{\sigma^2+\varepsilon}+\beta_k$ とすると、
+
+$$
+\frac{\partial u_k}{\partial x_j}
+= \frac{\gamma_k}{\sqrt{\sigma^2+\varepsilon}}
+\left(
+\delta_{kj}-\frac{1}{C}
+-\frac{(x_k-\mu)(x_j-\mu)}{C(\sigma^2+\varepsilon)}
+\right)
+$$
+
+です。$\delta_{kj}$ は $k=j$ のとき 1、それ以外は 0 です。平均と分散も入力から計算するため、それらの変化に対応する項が入ります。
+
+実際の `backward()` では、各演算で出力に対する損失の勾配と微分規則を組み合わせ、入力に対する勾配を順に求めます。残差接続の出力に対する勾配を $\boldsymbol{g}$ とすると、MLP 側では、
+
+$$
+\boldsymbol{g}_h=W_2^\top\boldsymbol{g},\qquad
+\boldsymbol{g}_a=\boldsymbol{g}_h\odot\operatorname{GELU}'(\boldsymbol{a}),\qquad
+\boldsymbol{g}_u=W_1^\top\boldsymbol{g}_a
+$$
+
+と進み、最後に $(\partial\boldsymbol{u}/\partial\boldsymbol{x})^\top\boldsymbol{g}_u$ を計算します。$\odot$ は要素ごとの積です。これが残差接続の式の第 2 項に当たります。attention 側も同様に、attention の各演算と、その手前の LayerNorm を逆順にたどります。
+
+ここまでの式は、手前の演算へ渡す、入力に対する損失の勾配を表しています。**逆伝播では、それと同時に $f$ の重みやバイアスの勾配も求めます。** $f$ のパラメータの 1 つを $\theta$ とし、残差接続を $\boldsymbol{y}=\boldsymbol{x}+f(\boldsymbol{x};\theta)$ と書きます。この演算の入力 $\boldsymbol{x}$ を固定して微分すると、直接足す $\boldsymbol{x}$ の項は $\theta$ に依存しないので、
+
+$$
+\frac{\partial\mathcal{L}}{\partial\theta}
+= \sum_i \frac{\partial\mathcal{L}}{\partial y_i}
+\frac{\partial f_i}{\partial\theta}
+= \sum_i g_i\frac{\partial f_i}{\partial\theta}
+$$
+
+となります。パラメータ $\theta$ に対する勾配は、$f$ を通じた寄与から求まります。
+
+上の MLP では、1 つの位置について計算した、重みとバイアスに対する勾配は次のとおりです。$\boldsymbol{g}_a$ は、先ほど求めた GELU の入力への勾配です。
+
+$$
+\begin{aligned}
+\frac{\partial\mathcal{L}}{\partial W_2}
+&= \boldsymbol{g}\boldsymbol{h}^{\top},
+&\frac{\partial\mathcal{L}}{\partial\boldsymbol{b}_2}
+&= \boldsymbol{g}, \\
+\frac{\partial\mathcal{L}}{\partial W_1}
+&= \boldsymbol{g}_a\boldsymbol{u}^{\top},
+&\frac{\partial\mathcal{L}}{\partial\boldsymbol{b}_1}
+&= \boldsymbol{g}_a
+\end{aligned}
+$$
+
+LayerNorm の学習パラメータに対する勾配も、その出力に対する勾配 $\boldsymbol{g}_u$ と forward 時の値から求められます。
+
+$$
+\frac{\partial\mathcal{L}}{\partial\gamma_k}
+= g_{u,k}\frac{x_k-\mu}{\sqrt{\sigma^2+\varepsilon}},
+\qquad
+\frac{\partial\mathcal{L}}{\partial\beta_k}=g_{u,k}
+$$
+
+各パラメータは全バッチ・全位置で共有されるので、実際の勾配はこれらの寄与を足した値です。各演算で**パラメータの勾配を求めながら、入力への勾配をさらに手前へ渡す**ことで、前の層のパラメータまで順に勾配が求まります。
+
+</details>
+
+### attention：value と参照の重みに対する勾配
+
+attention も、各演算の出力に対する勾配から入力に対する勾配を求める、という手順で計算します。まず、value の重み付き和を逆にたどり、**value と参照の重みのそれぞれに対する損失の勾配**を求めます。参照の重みは入力から計算する中間値なので、その勾配を使って softmax、スコアの内積計算の順に逆にたどり、query と key の勾配を求めます。最後に、query・key・value を作った線形変換に先ほどの規則を適用すれば、学習パラメータの勾配と、手前の演算へ渡す入力の勾配が得られます。causal mask により、位置 $t$ の損失は未来の位置の入力に依存しないため、それらの入力に対する勾配は 0 です。
+
+<details>
+<summary>偏微分の計算：value・softmax・query・key</summary>
+
+1 サンプル・1 head に注目し、バッチと head の添字を省略します。head の要素数を $d$ とし、dropout を省略すると、位置 $t$ の出力は次のようになります。
+
+$$
+s_{t,u} = \frac{1}{\sqrt d}\sum_{r=1}^{d}q_{t,r}k_{u,r},
+\qquad
+a_{t,u} = \frac{\exp(s_{t,u})}{\sum_{j=1}^{t}\exp(s_{t,j})}
+\quad (u\le t)
+$$
+
+$$
+o_{t,r} = \sum_{u=1}^{t} a_{t,u}v_{u,r}
+$$
+
+$q$、$k$、$v$ は query、key、value、$a$ は参照の重みです。causal mask により $u>t$ の重みは 0 です。下流から受け取った、出力に対する損失の勾配を $g_{t,r} = \partial\mathcal{L}/\partial o_{t,r}$ とします。
+
+まず、**value に対する損失の勾配**を求めます。$\partial o_{t,r}/\partial v_{u,j} = a_{t,u}\delta_{rj}$ なので、位置 $u$ の value に対する勾配は、それを参照する全位置 $t\ge u$ の出力を通じた寄与の和になります。
+
+$$
+\frac{\partial\mathcal{L}}{\partial v_{u,r}}
+= \sum_{t=u}^{T} a_{t,u}\,g_{t,r}
+$$
+
+この式では、出力に対する勾配 $g$ に forward 時の参照の重み $a$ を掛けて足しています。次に、**参照の重み $a$ に対する損失の勾配**を求めます。$\partial o_{t,r}/\partial a_{t,u} = v_{u,r}$ から、
+
+$$
+h_{t,u} \equiv \frac{\partial\mathcal{L}}{\partial a_{t,u}}
+= \sum_{r=1}^{d} g_{t,r}v_{u,r}
+$$
+
+となります。続いて、この勾配 $h$ と softmax の微分を組み合わせ、スコア $s$ に対する勾配を求めます。同じ行の要素について $\partial a_{t,j}/\partial s_{t,u} = a_{t,j}(\delta_{ju}-a_{t,u})$ なので、連鎖律より、
+
+$$
+\begin{aligned}
+e_{t,u} \equiv \frac{\partial\mathcal{L}}{\partial s_{t,u}}
+&= \sum_{j=1}^{t} h_{t,j}a_{t,j}(\delta_{ju}-a_{t,u}) \\
+&= a_{t,u}\left(h_{t,u}-\sum_{j=1}^{t}a_{t,j}h_{t,j}\right)
+\end{aligned}
+$$
+
+です。さらに、この勾配 $e$ とスコア $s$ の内積の微分を組み合わせると、query と key に対する勾配が得られます。
+
+$$
+\frac{\partial\mathcal{L}}{\partial q_{t,r}}
+= \frac{1}{\sqrt d}\sum_{u=1}^{t}e_{t,u}k_{u,r},
+\qquad
+\frac{\partial\mathcal{L}}{\partial k_{u,r}}
+= \frac{1}{\sqrt d}\sum_{t=u}^{T}e_{t,u}q_{t,r}
+$$
+
+ここで求めた query・key・value の勾配を、それぞれを作った線形変換の出力に対する勾配として使います。線形変換の規則を適用して重みと入力の勾配を求め、共通の入力については 3 つの経路の寄与を足し合わせます。このように、**中間値に対する勾配を順に計算することで、学習パラメータの勾配と、さらに手前の演算で使う入力の勾配が求まります**。マスクされた $u>t$ のスコアに対する勾配は 0 です。そのため、位置 $t$ の損失 $\ell_t$ の、未来の位置 $u>t$ の入力に対する勾配も 0 になります。
+
+</details>
+
+### 線形変換の順伝播と逆伝播を数字で追う
+
+次のアニメーションは、1 つの位置での線形変換 $\boldsymbol{y}=W\boldsymbol{x}$ を、説明用の小さな配列で計算する例です。「順方向」では入力と重みから出力を求め、「逆方向」では出力に対する損失の勾配 $\partial\mathcal{L}/\partial\boldsymbol{y}=[2,-1]^\top$ を与えて、重みと入力の勾配を求めます。「再生」または「1 手進む」で、どの値を掛け合わせ、どこで足し合わせるかを確認できます。
+
+<BackpropagationToy lang="ja" linearOnly client:visible />
 
 ## 共有した重みには 2 つの経路から勾配が届く
 
-第 7 章で見たように、`wte.weight` は入力側の埋め込みと出力側の `lm_head` で同じ `Parameter` です。1 つの `Parameter` が複数の場所で使われると、autograd は**それぞれの経路の勾配を足し合わせて** `.grad` に入れます。
+第 7 章で見たように、`wte.weight` は入力側の埋め込みと出力側の `lm_head` で共有する重みです。同じ重みが複数の場所で使われる場合、**それぞれの経路の勾配を足し合わせて**、その重みの勾配を求めます。
 
-次の図は、検証データの 64 文字について、`wte.weight` の 65 行それぞれに届いた勾配のノルムを経路ごとに分けたものです。分けるために、重みを共有しないコピーを作って同じ損失で backward し、2 つの勾配の和が共有した重みの勾配と一致することを確かめています。
+`wte.weight` は 65 行 × 128 列の配列で、1 行が 1 文字に対応します。その行の 128 個の重みには、それぞれ勾配があります。次の図では、その勾配のノルムを求め、入力側と出力側で比べます。計算に使う損失は、検証データの 64 文字で次の文字を予測したときの平均損失です。
+
+図の下の文字一覧で、入力に含まれる `n` と、含まれない `!` を選んで比べてください。**入力にない文字では入力側の勾配が 0 になり、出力側には勾配がある**ことを確認できます。
 
 <TiedGradient lang="ja" />
 
@@ -109,8 +338,6 @@ $$
 
 - **出力側**では、すべての位置で softmax の分母に全トークンの logits が含まれるため、65 行すべてに勾配が届きます。
 - **入力側**では、埋め込みとして取り出された行だけに勾配が届きます。この 64 文字に含まれる 32 種類の文字の行だけが 0 以外でした。
-
-この入力では、入力側の勾配（ノルム `0.12`〜`3.0`）が出力側（`0.0001`〜`0.77`）より大きくなっています。出力側の勾配が最も大きい行は `o`（`0.77`）、入力側は `n`（`3.0`）でした。
 
 ## 勾配の大きさはパラメータごとに違う
 
@@ -207,6 +434,6 @@ True
 
 ## 次の章へ
 
-`loss.backward()` は、forward で記録した演算を逆順にたどり、連鎖律で全パラメータの勾配を求めます。出発点の logits の勾配は $p - y$ で、残差接続は勾配をそのまま前の層へ渡し、causal mask は未来の位置への勾配を 0 にします。共有した重みには、入力側と出力側の勾配の和が届きます。
+この章では、各演算の微分を連鎖律でつなぎ、損失からすべての学習可能パラメータの勾配を求める仕組みを見ました。これが、`loss.backward()` の行う逆伝播です。
 
-勾配は、重みを動かす向きを教えてくれます。次章では、勾配を使って実際に重みを更新する AdamW と、学習率のスケジュール、勾配のクリップを含む学習ループ全体を読みます。
+勾配は、重みを動かす向きを教えてくれます。次章では、勾配を使って実際に重みを更新する AdamW と、学習率のスケジュール、勾配のクリップを含む学習ループ全体を読み解きます。

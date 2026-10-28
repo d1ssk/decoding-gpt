@@ -21,7 +21,7 @@ import ResidualStream from '../../../../components/ResidualStream.astro';
 
 ## Two lines of a Transformer block
 
-The previous chapters showed how attention gathers information from other positions. A Transformer block has one more component besides attention: the **MLP**. The two lines of [`Block.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L94-L106) connect them.
+The previous chapters showed how attention gathers information from other positions. In addition, a Transformer block contains an **MLP**. The two lines of [`Block.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L94-L106) connect them.
 
 ```python
 class Block(nn.Module):
@@ -66,7 +66,7 @@ class LayerNorm(nn.Module):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 ```
 
-`F.layer_norm(input, (C,), ...)` normalizes over the `C` components of the last axis, that is, **separately for each sample and position**. For the vector $\boldsymbol{x}$ at position `t`, output component $c$ is:
+`F.layer_norm(input, (C,), ...)` normalizes over the `C` components of the last axis, that is, **separately for each sample and position**. Writing the vector at position `t` in sample `b` as $\boldsymbol{x}$, output component $c$ is:
 
 $$
 \mu = \frac{1}{C}\sum_{c=0}^{C-1} x_c,\qquad
@@ -76,9 +76,9 @@ $$
 
 $\varepsilon = 10^{-5}$ is a small value that prevents division by zero. $\gamma$ is `weight` (initialized to 1) and $\beta$ is `bias` (initialized to 0); both are learned. This chapter's model uses `bias=False`, so it has no $\beta$.
 
-After normalization, the components at every position have mean 0 and a standard deviation of almost exactly 1. As we will see, residual-stream vectors grow as layers accumulate. With LayerNorm in front, each sublayer receives inputs on a consistent scale regardless of the stream's size.
+Before applying $\gamma$ and $\beta$, the components have mean 0. Their standard deviation is also close to 1 when the input variance is much larger than $\varepsilon$. Applying the per-component $\gamma$ and $\beta$ then makes the final output's mean and standard deviation depend on the learned parameters as well.
 
-The diagram below shows the vector at position 52 entering layer 0's `ln_1` in the model trained in chapter 11. The input's standard deviation is about `0.073`; after normalization it is 1. The sliders add the same value to every input component or multiply them all by the same value, and the normalized result barely changes.
+The diagram below shows the vector at position 52 entering layer 0's `ln_1` in the model trained in chapter 11. The input's standard deviation is about `0.073`; normalization brings it close to 1 before multiplication by $\gamma$. The sliders add the same value to every input component or multiply them all by the same value, and the values at this stage barely change.
 
 <LayerNormDemo lang="en" />
 
@@ -149,15 +149,19 @@ The MLP weights contain $8C^2$ elements across `c_fc` and `c_proj` (excluding bi
 
 ## Residual stream: build up information by addition
 
-Expanding the additions in `Block.forward()` across all blocks, the last block's output $\boldsymbol{x}_{\text{final}}$ is the following sum, where $\boldsymbol{a}_l$ and $\boldsymbol{m}_l$ are the outputs of layer $l$'s attention and MLP:
+Expanding the additions in `Block.forward()` across all blocks, the last block's output $\boldsymbol{x}_{\text{final}}$ is the following sum:
 
 $$
 \boldsymbol{x}_{\text{final}} = \boldsymbol{x}_{\text{emb}} + \sum_{l=0}^{L-1}\left(\boldsymbol{a}_l + \boldsymbol{m}_l\right)
 $$
 
-$\boldsymbol{x}_{\text{emb}}$ is the embedding sum built in chapter 3. Each sublayer leaves the stream's existing values in place and only adds its own output. Later layers read the sum of all earlier writes through LayerNorm.
+Here, $\boldsymbol{a}_l$ and $\boldsymbol{m}_l$ are the outputs of layer $l$'s attention and MLP, and $\boldsymbol{x}_{\text{emb}}$ is the embedding sum built in chapter 3. Each sublayer adds its own output to the existing stream. Each layer reads the sum of all earlier writes through LayerNorm.
 
-This form also helps training. The derivative of addition is the identity, so the gradient of the loss reaches earlier layers directly along the addition path, in parallel with the paths through each sublayer. Chapter 9 checks how gradients flow.
+This addition also affects how gradients flow during training. Write one residual connection as `y = x + f(x)`, where `f` is LayerNorm followed by attention or the MLP. The input `x` affects `y` through two paths: one transforms it through `f`, and the other adds it directly.
+
+The derivative of addition is the identity, so along the direct addition path, the loss gradient arriving at `y` reaches `x` unchanged. Along the path through `f`, the gradient is modified by that computation as it travels back to `x`.
+
+The final gradient at `x` is the sum of the direct contribution and the contribution modified by the computation of `f`. The direct path carries a learning signal to earlier layers without passing through the sublayer's transformation. Chapter 9 examines the gradient calculations in detail.
 
 ### Scale the writes at initialization
 
@@ -179,8 +183,6 @@ For the model from chapter 11, the diagram below shows, at a selected position, 
 <ResidualStream lang="en" />
 
 At position 52 (the `G` of the second `Good`), the embedding has norm `0.83`, layer 0's MLP writes a vector of norm `5.85`, and the stream's norm finally reaches `8.82`. Averaged over 200 validation windows × 64 positions, the stream's norm also grows from `0.81` for the embedding to `9.23` after the last block. Among sublayer writes, layer 0's MLP had the largest average norm, `5.47`.
-
-The stream's norm thus changes by more than a factor of ten, while LayerNorm gives every sublayer input a standard deviation of 1.
 
 ## Verify in code
 
@@ -239,6 +241,6 @@ The first line shows that the last block's output equals the embedding plus the 
 
 ## Next chapter
 
-A Transformer block passes LayerNorm-normalized inputs to attention and the MLP and adds their outputs to the residual stream. Attention moves information between positions; the MLP adds up `4C` fixed vectors at each position with input-dependent coefficients. In the trained model, the stream's norm grew with depth while LayerNorm kept sublayer inputs on a consistent scale.
+A Transformer block passes LayerNorm-normalized inputs to attention and the MLP and adds their outputs to the residual stream. Attention moves information between positions; the MLP adds up `4C` fixed vectors at each position with input-dependent coefficients.
 
 After all blocks, the stream still holds `C`-component vectors. The next chapter follows how the final LayerNorm and `lm_head` turn them into vocabulary scores, and how softmax turns those into next-token probabilities.

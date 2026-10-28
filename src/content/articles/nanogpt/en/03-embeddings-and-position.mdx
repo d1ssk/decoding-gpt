@@ -298,7 +298,7 @@ Repeated updates also change the size of the vectors. In the [chapter 11](../11-
 
 ### Token embeddings after training
 
-Let us look at `wte.weight` in the model updated 2,000 times in chapter 11 (`C = 128`). Each of the 65 rows is a vector with 128 components, which cannot be drawn directly. We therefore found the two directions along which the 65 vectors spread the most (the first and second principal components) and placed each character by its projection onto those two directions.
+Let us look at `wte.weight` in the model updated 2,000 times in chapter 11 (`C = 128`). Each of the 65 rows is a vector with 128 components, which cannot be drawn directly. We therefore found the two directions along which the 65 vectors spread the most (the first and second principal components) and placed each character by its projection onto those two directions. The 3D mode adds the third principal component; drag or use the arrow keys to rotate, and adjust the zoom to inspect the arrangement.
 
 <EmbeddingMap lang="en" />
 
@@ -309,9 +309,29 @@ After 0 updates, the first and second principal components explain 4.6% and 4.2%
 3. **Characters of the same kind point in similar directions.** The characters with the highest cosine similarity to `a` are `i` and `o` (0.52) and `e` (0.48); the closest to `.` are `?` (0.85) and `!` (0.78). The mean cosine similarity is 0.405 among lowercase vowels, 0.109 among consonants, and −0.024 between vowels and consonants. Before training, all three are close to 0.
 4. **The link between uppercase and lowercase forms stays weak.** Pairs such as `a` and `A` have a mean cosine similarity of 0.241, lower than the mean of 0.355 among uppercase letters.
 
+The **third principal component tends to separate punctuation and whitespace from lowercase consonants**. It explains 6.9% of the variance: `:`, `.`, `,`, `?`, `;`, `!`, space, and newline lie on the positive side, while many lowercase consonants, including `v`, `c`, and `p`, lie on the negative side. Lowercase vowels cluster near zero.
+
 Nothing told the model which characters are vowels or punctuation. Updating the weights to improve next-character prediction made characters that are used similarly point in similar directions.
 
 nanoGPT shares the token embedding weight `wte.weight` with the output-side `lm_head.weight`. Each row represents an input character and also computes the score for that character coming next ([chapter 7](../07-hidden-states-to-probabilities/)). This observation alone cannot separate which role produced the arrangement. [Chapter 9](../09-backpropagation/) shows the shared weight receiving gradients from both paths.
+
+### Semantic structure in word embeddings
+
+The character embeddings above illustrate how usage can be reflected in the arrangement of vectors. In embeddings that represent whole words, semantic relationships can also appear as differences between vectors. An example associated with word embeddings such as Word2Vec is:
+
+$$
+\boldsymbol{v}_{\mathrm{prince}}
+-
+\boldsymbol{v}_{\mathrm{man}}
++
+\boldsymbol{v}_{\mathrm{woman}}
+\approx
+\boldsymbol{v}_{\mathrm{princess}}
+$$
+
+One way to read this is that moving the vector for `prince` in the direction of the difference from `man` to `woman` brings it closer to the vector for `princess`. Along with word similarity, semantic relationships can be represented as directions in the vector space. Such relationships develop through learning to predict from large amounts of text.
+
+Our model works with characters, but it shares the same underlying idea: as it learns to predict, regularities in language emerge as relationships between vectors.
 
 ### Position embeddings after training
 
@@ -319,7 +339,7 @@ We also computed the cosine similarity between the 64 rows of the position embed
 
 <PositionSimilarity lang="en" />
 
-Before training, the position vectors are nearly unrelated to each other. After 2,000 updates, nearby positions point in similar directions. Adjacent positions have a mean cosine similarity of 0.649; it falls as the position difference grows, crosses 0 around a difference of 27–28, and reaches −0.74 at a difference of 56. The first principal component of the 64 position vectors explains 62.6% of the variance, and its value increases almost monotonically from position 0 to 63.
+Before training, the position vectors are nearly unrelated to each other. After 2,000 updates, nearby positions point in similar directions. Adjacent positions have a mean cosine similarity of 0.649; it falls as the position difference grows, is near 0 at a difference of 27–28, and reaches −0.74 at a difference of 56. The first principal component of the 64 position vectors explains 62.6% of the variance, and its value increases almost monotonically from position 0 to 63.
 
 Each position embedding starts as an independent row, with no ordering between positions given in advance. Training produced vectors that reflect which positions come before and after one another.
 

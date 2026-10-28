@@ -1,0 +1,47 @@
+.sm-canvas .nm-cell text,
+.sm-value {
+  font: 19px var(--font-mono);
+}
+.sm-token {
+  transition: transform var(--spatial-duration) cubic-bezier(0.35, 0, 0.2, 1);
+  pointer-events: none;
+}
+.sm-token rect {
+  stroke-width: 2;
+}
+.sm-operand rect {
+  fill: var(--nm-blue-bg);
+  stroke: var(--nm-blue);
+}
+.sm-operand .sm-value {
+  fill: var(--nm-blue);
+}
+.sm-result rect {
+  fill: var(--accent-light);
+  stroke: var(--accent);
+}
+.sm-result .sm-value {
+  fill: var(--accent);
+}
+.sm-ref {
+  font: 11px var(--font-mono);
+  fill: var(--ink-secondary);
+}
+.sm-symbols text {
+  font: 18px var(--font-mono);
+  fill: var(--ink-secondary);
+}
+.sm-mask {
+  font: 16px var(--font-mono);
+  fill: var(--ink-secondary);
+}
+.sm-branches path {
+  fill: none;
+  stroke: var(--line-strong);
+  stroke-width: 1.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sm-token {
+    transition: none;
+  }
+}

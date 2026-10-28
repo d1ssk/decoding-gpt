@@ -5,6 +5,14 @@ export const widthColors: Record<number, string> = {
   256: '#1e5b49',
 };
 
+// Shared geometry for plot points and legend keys, centered at the origin.
+export const layerMarkers: Record<number, string> = {
+  1: 'M-5 0a5 5 0 1 0 10 0a5 5 0 1 0-10 0',
+  2: 'M-4.5-4.5h9v9h-9Z',
+  4: 'M0-6L5.5 4.5H-5.5Z',
+  8: 'M0-6.5L6.5 0 0 6.5-6.5 0Z',
+};
+
 export const scalingUi = {
   ja: {
     caption: '条件を変えて学習した 28 回の結果',
@@ -16,7 +24,9 @@ export const scalingUi = {
       overfit: '過学習と dropout',
     },
     sizeNote:
-      '横軸は位置埋め込みを除くパラメータ数（対数目盛）、縦軸は最終的な検証損失です。同じ色は同じ n_embd で、点は n_layer = 1, 2, 4, 8 の順に並びます。白抜きの点は学習用データの損失です。',
+      '横軸は位置埋め込みを除くパラメータ数（対数目盛）、縦軸は学習後の損失です。色は n_embd、形は n_layer を表します。線は同じ n_embd の検証損失を結んでいます。',
+    widthLegend: 'n_embd（色）',
+    layerLegend: 'n_layer（形）',
     lengthNote:
       'L = 4、C = 128 のモデルを、max_iters（= lr_decay_iters）を変えて学習しました。横軸は処理したトークン数（対数目盛）です。',
     contextNote:
@@ -48,7 +58,9 @@ export const scalingUi = {
       overfit: 'Overfitting and dropout',
     },
     sizeNote:
-      'The horizontal axis is the parameter count excluding position embeddings (log scale); the vertical axis is the final validation loss. Each color is one n_embd, with points ordered by n_layer = 1, 2, 4, 8. Hollow points show the training loss.',
+      'The horizontal axis is the parameter count excluding position embeddings (log scale); the vertical axis is the loss after training. Color shows n_embd and shape shows n_layer. Lines connect validation losses with the same n_embd.',
+    widthLegend: 'n_embd (color)',
+    layerLegend: 'n_layer (shape)',
     lengthNote:
       'A model with L = 4 and C = 128 trained with different max_iters (= lr_decay_iters). The horizontal axis is the number of tokens processed (log scale).',
     contextNote:

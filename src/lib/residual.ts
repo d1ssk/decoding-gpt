@@ -39,6 +39,8 @@ export const residualUi = {
     layerNormCaption: 'LayerNorm は成分の平均と散らばりをそろえる',
     layerNormNote:
       '学習済みモデルの位置 52（2 つ目の Good の G）で、層 0 の ln_1 に入るベクトル（128 成分）です。スライダーで入力全体に定数を足したり、定数倍したりできます。',
+    layerNormScaleNote:
+      '3 つの図は共通の縦軸（−4〜4）で表示し、棒は左から同じ成分順に並べています。',
     shift: '全成分に足す値',
     scale: '全成分に掛ける値',
     input: '入力 x',
@@ -67,6 +69,8 @@ export const residualUi = {
       'LayerNorm standardizes the mean and spread of components',
     layerNormNote:
       'This is the 128-component vector entering layer 0’s ln_1 at position 52 (the G of the second Good) in the trained model. The sliders add a constant to every input component or multiply them all by a constant.',
+    layerNormScaleNote:
+      'All three plots share the same vertical scale (−4 to 4), with components in the same order from left to right.',
     shift: 'Value added to every component',
     scale: 'Value multiplying every component',
     input: 'Input x',

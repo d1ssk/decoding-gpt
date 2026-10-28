@@ -51,7 +51,7 @@ python train.py config/train_shakespeare_char.py --device=cpu --compile=False \
 | `eval_interval` / `eval_iters`     | 250 / 20         | Config file, command line     |
 | `device` / `compile`               | `cpu` / `False`  | Command line                  |
 
-The vocabulary size, 65, is read from `meta.pkl`. The model has 804,096 parameters; the count printed at startup (excluding position embeddings) is `0.80M`. Each update uses 12 × 64 = 768 tokens, so 2,001 updates process about 1.54 million tokens. The training data `train.bin` holds 1,003,854 tokens, so training covers it about 1.5 times.
+The vocabulary size, 65, is read from `meta.pkl`. The model has 804,096 parameters; the count printed at startup (excluding position embeddings) is `0.80M`. Each update uses 12 × 64 = 768 tokens, so 2,001 updates process about 1.54 million tokens. The training data `train.bin` holds 1,003,854 tokens, so the total processed is equivalent to about 1.5 passes over the data.
 
 ## Read the training log
 
@@ -142,7 +142,7 @@ with torch.no_grad():
             print('---------------')
 ```
 
-This command's output matched the text shown above for 2,000 updates:
+The text shown above for 2,000 updates was generated with this command:
 
 ```text
 I by done what leave death,
@@ -161,15 +161,7 @@ And shall
 
 ## Reproduce the values in these articles
 
-The values in the diagrams of this chapter and chapters 5–10 come from rerunning the `train.py` training above with added recording. The rerun script uses the pinned commit's `model.py` unchanged and builds batches with the same order of random draws as `train.py`, applying the same evaluation, learning-rate schedule, AdamW, and gradient clipping. It records each update's learning rate and gradient norm, and the weights at intermediate stages, without consuming random numbers.
-
-The generation environment confirmed three points:
-
-- At all 2,001 updates, each batch loss matched `train.py`'s log to four decimal places.
-- The weights after 2,000 updates exactly matched the weights in the `ckpt.pt` saved by `train.py`.
-- Text generated from the weights after 2,000 updates matched the output of `sample.py`.
-
-The same command can produce different loss values and generated text with a different PyTorch version, CPU type, `--device=mps`, or a GPU. Even then, the loss should still fall from about 4.17 to around 1.9, with the dialogue format and English-like words appearing.
+The values in the diagrams of this chapter and chapters 5–10 come from rerunning the `train.py` training above with added recording. The rerun script uses the pinned commit's `model.py` unchanged and builds batches with the same order of random draws as `train.py`, applying the same evaluation, learning-rate schedule, AdamW, and gradient clipping. It records each update's learning rate and gradient norm, and the weights at intermediate stages, without changing the sequence of random numbers used for training.
 
 ## Next chapter
 

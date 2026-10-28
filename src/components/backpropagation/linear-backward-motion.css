@@ -1,0 +1,58 @@
+.lb-moving-token,
+.lb-moving-input,
+.lb-moving-gradient,
+.lb-moving-label {
+  transition: transform var(--backward-motion-duration)
+    cubic-bezier(0.35, 0, 0.2, 1);
+}
+.lb-moving-token {
+  pointer-events: none;
+}
+.lb-moving-token rect {
+  stroke-width: 2;
+}
+.lb-moving-token text {
+  font: 22px var(--font-mono);
+}
+.lb-orange rect {
+  fill: var(--nm-orange-bg);
+  stroke: var(--nm-orange);
+}
+.lb-orange text {
+  fill: var(--nm-orange);
+}
+.lb-green rect {
+  fill: var(--accent-light);
+  stroke: var(--accent);
+}
+.lb-green text {
+  fill: var(--accent);
+}
+.lb-blue-label {
+  font: 600 18px var(--font-mono);
+  fill: var(--nm-blue);
+}
+.lb-small-label {
+  font: 12px var(--font-body);
+  fill: var(--ink-secondary);
+}
+.lb-index {
+  font: 12px var(--font-mono);
+  fill: var(--ink-muted);
+}
+.lb-multiply,
+.lb-plus,
+.lb-equals {
+  font: 18px var(--font-mono);
+  fill: var(--ink-secondary);
+}
+@media (prefers-reduced-motion: reduce) {
+  .lb-moving-token,
+  .lb-moving-input,
+  .lb-moving-gradient,
+  .lb-moving-label,
+  .lb-fade,
+  .lb-operators {
+    transition: none;
+  }
+}

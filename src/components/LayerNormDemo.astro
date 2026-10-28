@@ -10,23 +10,32 @@ const { lang } = Astro.props;
 const ui = residualUi[lang];
 const { input, weight } = data.layerNorm;
 const result = layerNorm(input, weight);
-// Pixels per unit for each chart; bars are clipped at ±38 pixels.
+const plot = { width: 600, height: 104, zeroY: 52, scale: 12, limit: 48 };
+const ticks = [-4, -2, 0, 2, 4];
 const charts = [
-  { key: 'input', label: ui.input, values: input, scale: 60 },
+  { key: 'input', label: ui.input, values: input },
   {
     key: 'normalized',
     label: ui.normalized,
     values: result.normalized,
-    scale: 9,
   },
-  { key: 'output', label: ui.output, values: result.output, scale: 9 },
-];
-const payload = JSON.stringify({ input, weight });
+  { key: 'output', label: ui.output, values: result.output },
+].map((chart) => {
+  const mean =
+    chart.values.reduce((sum, value) => sum + value, 0) / input.length;
+  const std = Math.sqrt(
+    chart.values.reduce((sum, value) => sum + (value - mean) ** 2, 0) /
+      input.length,
+  );
+  return { ...chart, mean: Math.abs(mean) < 5e-5 ? 0 : mean, std };
+});
+const payload = JSON.stringify({ input, weight, plot });
 ---
 
 <figure class="layer-norm" data-layer-norm data-payload={payload}>
   <figcaption>{ui.layerNormCaption}</figcaption>
   <p class="note">{ui.layerNormNote}</p>
+  <p class="note">{ui.layerNormScaleNote}</p>
   <div class="controls">
     <label>
       {ui.shift}: <output data-shift-value>0.00</output>
@@ -57,29 +66,52 @@ const payload = JSON.stringify({ input, weight });
     <div class="chart">
       <p>
         {chart.label}
-        {chart.key !== 'output' && (
-          <span class="stats">
+        <span class="stats">
+          <span>
             {ui.mean}{' '}
-            <span data-stat={`${chart.key}-mean`}>
-              {chart.key === 'input' ? result.mean.toFixed(4) : '0.0000'}
-            </span>
-            {' · '}
-            {ui.std}{' '}
-            <span data-stat={`${chart.key}-std`}>
-              {chart.key === 'input' ? result.std.toFixed(4) : '1.0000'}
-            </span>
+            <span data-stat={`${chart.key}-mean`}>{chart.mean.toFixed(4)}</span>
           </span>
-        )}
+          <span>
+            {ui.std}{' '}
+            <span data-stat={`${chart.key}-std`}>{chart.std.toFixed(4)}</span>
+          </span>
+        </span>
       </p>
-      <svg viewBox="0 0 600 80" role="img" aria-label={chart.label}>
-        <path d="M0 40H600" class="zero" />
-        <path
-          data-bars={chart.key}
-          data-scale={chart.scale}
-          d={barsPath(chart.values, 600, 40, chart.scale, 38)}
-          class:list={['bars', chart.key]}
-        />
-      </svg>
+      <div class="chart-plot">
+        <div class="y-axis" aria-hidden="true">
+          {ticks.map((tick) => (
+            <span
+              style={`top: ${((plot.zeroY - tick * plot.scale) / plot.height) * 100}%`}
+            >
+              {tick}
+            </span>
+          ))}
+        </div>
+        <svg
+          viewBox={`0 0 ${plot.width} ${plot.height}`}
+          preserveAspectRatio="none"
+          role="img"
+          aria-label={chart.label}
+        >
+          {ticks.map((tick) => (
+            <path
+              d={`M0 ${plot.zeroY - tick * plot.scale}H${plot.width}`}
+              class={tick === 0 ? 'zero' : 'grid-line'}
+            />
+          ))}
+          <path
+            data-bars={chart.key}
+            d={barsPath(
+              chart.values,
+              plot.width,
+              plot.zeroY,
+              plot.scale,
+              plot.limit,
+            )}
+            class:list={['bars', chart.key]}
+          />
+        </svg>
+      </div>
     </div>
   ))}
 </figure>
@@ -90,9 +122,16 @@ const payload = JSON.stringify({ input, weight });
   document
     .querySelectorAll<HTMLElement>('[data-layer-norm]')
     .forEach((root) => {
-      const { input, weight } = JSON.parse(root.dataset.payload!) as {
+      const { input, weight, plot } = JSON.parse(root.dataset.payload!) as {
         input: number[];
         weight: number[];
+        plot: {
+          width: number;
+          height: number;
+          zeroY: number;
+          scale: number;
+          limit: number;
+        };
       };
       const shift = root.querySelector<HTMLInputElement>('[data-shift]')!;
       const scale = root.querySelector<HTMLInputElement>('[data-scale]')!;
@@ -102,7 +141,7 @@ const payload = JSON.stringify({ input, weight });
         )!;
         path.setAttribute(
           'd',
-          barsPath(values, 600, 40, Number(path.dataset.scale), 38),
+          barsPath(values, plot.width, plot.zeroY, plot.scale, plot.limit),
         );
       };
       const update = () => {
@@ -112,23 +151,24 @@ const payload = JSON.stringify({ input, weight });
         root.querySelector('[data-scale-value]')!.textContent = s.toFixed(2);
         const x = input.map((v) => v * s + a);
         const result = layerNorm(x, weight);
-        draw('input', x);
-        draw('normalized', result.normalized);
-        draw('output', result.output);
-        const mean = result.normalized.reduce((p, v) => p + v, 0) / x.length;
-        const std = Math.sqrt(
-          result.normalized.reduce((p, v) => p + (v - mean) ** 2, 0) / x.length,
-        );
-        const stats = {
-          'input-mean': result.mean,
-          'input-std': result.std,
-          'normalized-mean': Math.abs(mean) < 5e-5 ? 0 : mean,
-          'normalized-std': std,
-        };
-        Object.entries(stats).forEach(([key, value]) => {
-          root.querySelector(`[data-stat="${key}"]`)!.textContent =
-            value.toFixed(4);
-        });
+        for (const [key, values] of Object.entries({
+          input: x,
+          normalized: result.normalized,
+          output: result.output,
+        })) {
+          draw(key, values);
+          const mean =
+            values.reduce((sum, value) => sum + value, 0) / values.length;
+          const std = Math.sqrt(
+            values.reduce((sum, value) => sum + (value - mean) ** 2, 0) /
+              values.length,
+          );
+          root.querySelector(`[data-stat="${key}-mean"]`)!.textContent = (
+            Math.abs(mean) < 5e-5 ? 0 : mean
+          ).toFixed(4);
+          root.querySelector(`[data-stat="${key}-std"]`)!.textContent =
+            std.toFixed(4);
+        }
       };
       [shift, scale].forEach((control) => {
         control.disabled = false;
@@ -166,23 +206,50 @@ const payload = JSON.stringify({ input, weight });
     font-family: var(--font-mono);
   }
   .chart p {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.75rem;
     font-size: 0.8rem;
     margin: 0.75rem 0 0.25rem;
   }
   .stats {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.75rem;
     color: var(--ink-muted);
     font-family: var(--font-mono);
-    margin-left: 0.75rem;
+  }
+  .stats > span {
     white-space: nowrap;
   }
-  svg {
+  .chart-plot {
+    display: grid;
+    grid-template-columns: 2rem minmax(0, 1fr);
+  }
+  .y-axis {
+    position: relative;
+    color: var(--ink-muted);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+  }
+  .y-axis span {
+    position: absolute;
+    right: 0.5rem;
+    transform: translateY(-50%);
+  }
+  .chart-plot svg {
     display: block;
-    height: auto;
+    height: 6.5rem;
     width: 100%;
   }
   .zero {
     stroke: var(--line-strong);
     stroke-width: 1;
+  }
+  .grid-line {
+    stroke: var(--line-strong);
+    stroke-width: 0.5;
+    opacity: 0.5;
   }
   .bars.input {
     fill: #a05a20;

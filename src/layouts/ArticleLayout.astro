@@ -17,9 +17,11 @@ interface Props {
   alternateHref: string;
   previous?: NavItem;
   next?: NavItem;
+  siblings: CollectionEntry<'articles'>[];
 }
 
-const { article, headings, alternateHref, previous, next } = Astro.props;
+const { article, headings, alternateHref, previous, next, siblings } =
+  Astro.props;
 const { data } = article;
 const lang = data.lang as Language;
 const t = useTranslations(lang);
@@ -50,16 +52,44 @@ const articleNumber = String(data.order).padStart(2, '0');
         <slot />
       </article>
 
-      {tableOfContents.length >= 3 && (
+      {(tableOfContents.length >= 3 || data.series === 'nanogpt') && (
         <aside class="toc">
-          <h2>{t.onThisPage}</h2>
-          <ol>
-            {tableOfContents.map((heading) => (
-              <li>
-                <a href={`#${heading.slug}`}>{heading.text}</a>
-              </li>
-            ))}
-          </ol>
+          {tableOfContents.length >= 3 && (
+            <nav aria-labelledby="page-toc-heading">
+              <h2 id="page-toc-heading">{t.onThisPage}</h2>
+              <ol>
+                {tableOfContents.map((heading) => (
+                  <li>
+                    <a href={`#${heading.slug}`}>{heading.text}</a>
+                  </li>
+                ))}
+              </ol>
+            </nav>
+          )}
+          {data.series === 'nanogpt' && (
+            <details class="series-toc">
+              <summary>{t.allNanoGptArticles}</summary>
+              <nav aria-label={t.allNanoGptArticles}>
+                <ol>
+                  {siblings.map((sibling) => (
+                    <li value={sibling.data.order}>
+                      <a
+                        href={localizedPath(
+                          lang,
+                          `${sibling.data.series}/${sibling.data.slug}/`,
+                        )}
+                        aria-current={
+                          sibling.id === article.id ? 'page' : undefined
+                        }
+                      >
+                        {sibling.data.title}
+                      </a>
+                    </li>
+                  ))}
+                </ol>
+              </nav>
+            </details>
+          )}
         </aside>
       )}
     </div>
@@ -185,6 +215,8 @@ const articleNumber = String(data.order).padStart(2, '0');
     border-top: 1px solid var(--line-strong);
     position: sticky;
     top: 2rem;
+    max-height: calc(100dvh - 4rem);
+    overflow-y: auto;
   }
 
   .toc h2 {
@@ -220,6 +252,25 @@ const articleNumber = String(data.order).padStart(2, '0');
 
   .toc a:hover {
     color: var(--accent);
+  }
+
+  .series-toc {
+    border-top: 1px solid var(--line-strong);
+    margin-top: 1.5rem;
+  }
+
+  .series-toc summary {
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 0.9rem 0;
+  }
+
+  .series-toc a[aria-current='page'] {
+    color: var(--accent);
+    font-weight: 700;
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
   }
 
   .source-metadata {
@@ -322,6 +373,8 @@ const articleNumber = String(data.order).padStart(2, '0');
     .toc {
       grid-row: 1;
       position: static;
+      max-height: none;
+      overflow-y: visible;
     }
   }
 

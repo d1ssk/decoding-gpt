@@ -45,6 +45,7 @@ const percent = (ratio: number) => (ratio * 100).toFixed(1);
 const initial = data.stages[initialStage];
 const payload = JSON.stringify({
   layouts,
+  coordinates: data.stages.map((s) => s.tokenPca),
   cosine: data.stages.map((s) => s.tokenCosine),
   ratios: data.stages.map((s) => s.tokenPcaRatio),
   correlation: data.stages.map((s) => s.pc1LogCountCorrelation),
@@ -75,8 +76,53 @@ const payload = JSON.stringify({
       </label>
     ))}
   </fieldset>
+  <fieldset>
+    <legend>{ui.dimensions}</legend>
+    <label>
+      <input
+        type="radio"
+        name={`embedding-map-mode-${lang}`}
+        data-mode
+        value="2"
+        checked
+        disabled
+      />
+      {ui.twoD}
+    </label>
+    <label>
+      <input
+        type="radio"
+        name={`embedding-map-mode-${lang}`}
+        data-mode
+        value="3"
+        disabled
+      />
+      {ui.threeD}
+    </label>
+  </fieldset>
+  <div data-rotation hidden>
+    <p class="note">{ui.rotation}</p>
+    <span class="zoom-readout">
+      {ui.zoom}: <output data-zoom-value>1.5×</output>
+    </span>
+    <button type="button" data-reset>
+      {ui.reset}
+    </button>
+  </div>
   <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={ui.caption}>
     <rect x="0.5" y="0.5" width={width - 1} height={height - 1} class="frame" />
+    <g data-pca-axes visibility="hidden">
+      {[0, 1, 2].map((axis) => (
+        <g>
+          <line data-axis={axis} stroke="currentColor" stroke-opacity="0.35" />
+          <text
+            data-axis-label={axis}
+            fill="currentColor"
+            font-size="12"
+          >{`PC${axis + 1}`}</text>
+        </g>
+      ))}
+    </g>
     {vocab.map((char, id) => (
       <text
         data-glyph={id}
@@ -132,6 +178,12 @@ const payload = JSON.stringify({
   </div>
   <dl class="readout" aria-live="polite">
     <div>
+      <dt>{ui.coordinates}</dt>
+      <dd data-coordinates>
+        {initial.tokenPca[initialChar].map((v) => v.toFixed(4)).join(' / ')}
+      </dd>
+    </div>
+    <div>
       <dt>{ui.selected}</dt>
       <dd data-selected>{charLabel(vocab[initialChar])}</dd>
     </div>
@@ -156,15 +208,15 @@ const payload = JSON.stringify({
   document
     .querySelectorAll<HTMLElement>('[data-embedding-map]')
     .forEach((root) => {
-      const { layouts, cosine, ratios, correlation, vocab } = JSON.parse(
-        root.dataset.payload!,
-      ) as {
-        layouts: number[][][];
-        cosine: number[][][];
-        ratios: number[][];
-        correlation: number[];
-        vocab: string[];
-      };
+      const { layouts, coordinates, cosine, ratios, correlation, vocab } =
+        JSON.parse(root.dataset.payload!) as {
+          layouts: number[][][];
+          coordinates: number[][][];
+          cosine: number[][][];
+          ratios: number[][];
+          correlation: number[];
+          vocab: string[];
+        };
       const ui = embeddingMapUi[root.dataset.lang === 'ja' ? 'ja' : 'en'];
       const state = JSON.parse(root.dataset.initial!) as {
         stage: number;
@@ -173,8 +225,67 @@ const payload = JSON.stringify({
       const glyphs = root.querySelectorAll<SVGTextElement>('[data-glyph]');
       const buttons = root.querySelectorAll<HTMLButtonElement>('[data-char]');
 
+      let mode = 2;
+      const svg = root.querySelector<SVGSVGElement>('svg')!;
+      let yaw = -25;
+      let pitch = 20;
+      let zoom = 1.5;
+      const rotation = root.querySelector<HTMLElement>('[data-rotation]')!;
+      const axes = root.querySelector<SVGGElement>('[data-pca-axes]')!;
+      // One common extent across stages and axes preserves relative distances.
+      const extent =
+        Math.max(...coordinates.flat().map((p) => Math.hypot(...p))) * 1.15;
+      // Match the original axis length at the initial 1.5× zoom.
+      const axisExtent = extent / 1.5;
+      const project = ([x, y, z]: number[]) => {
+        const a = (yaw * Math.PI) / 180;
+        const b = (pitch * Math.PI) / 180;
+        const horizontal = Math.cos(a) * x + Math.sin(a) * z;
+        const depth = -Math.sin(a) * x + Math.cos(a) * z;
+        return [
+          320 + (horizontal * 180 * zoom) / extent,
+          230 - ((Math.cos(b) * y - Math.sin(b) * depth) * 180 * zoom) / extent,
+        ];
+      };
       const render = () => {
-        const layout = layouts[state.stage];
+        const layout =
+          mode === 3
+            ? coordinates[state.stage].map(project)
+            : layouts[state.stage];
+        rotation.hidden = mode !== 3;
+        svg.setAttribute('tabindex', mode === 3 ? '0' : '-1');
+        svg.setAttribute(
+          'aria-label',
+          mode === 3 ? `${ui.caption}. ${ui.rotation}` : ui.caption,
+        );
+        root.querySelector('[data-zoom-value]')!.textContent =
+          `${zoom.toFixed(1)}×`;
+        svg.style.touchAction = mode === 3 ? 'none' : 'auto';
+        axes.setAttribute('visibility', mode === 3 ? 'visible' : 'hidden');
+        [0, 1, 2].forEach((axis) => {
+          const start = [0, 0, 0],
+            end = [0, 0, 0];
+          start[axis] = -axisExtent;
+          end[axis] = axisExtent;
+          const a = project(start),
+            b = project(end);
+          const line = axes.querySelector(`[data-axis="${axis}"]`)!;
+          for (const [name, value] of Object.entries({
+            x1: a[0],
+            y1: a[1],
+            x2: b[0],
+            y2: b[1],
+          }))
+            line.setAttribute(name, String(value));
+          const label = axes.querySelector(`[data-axis-label="${axis}"]`)!;
+          label.setAttribute('x', String(b[0] + 5));
+          label.setAttribute('y', String(b[1] - 5));
+        });
+        root.querySelector('[data-coordinates]')!.textContent = coordinates[
+          state.stage
+        ][state.id]
+          .map((v) => v.toFixed(4))
+          .join(' / ');
         const top = cosine[state.stage][state.id]
           .map((v, j) => [v, j] as const)
           .filter(([, j]) => j !== state.id)
@@ -196,10 +307,19 @@ const payload = JSON.stringify({
         root.querySelector('[data-neighbors]')!.textContent = top
           .map(([v, j]) => `${charLabel(vocab[j])} ${(v / 1000).toFixed(2)}`)
           .join(' · ');
-        const [pc1, pc2] = ratios[state.stage].map((r) =>
+        const [pc1, pc2, pc3] = ratios[state.stage].map((r) =>
           Number((r * 100).toFixed(1)),
         );
-        root.querySelector('[data-axes]')!.textContent = ui.axes(pc1, pc2);
+        root.querySelector('[data-axes]')!.textContent =
+          mode === 3
+            ? ui.axes3(
+                pc1,
+                pc2,
+                pc3,
+                ratios[state.stage].slice(0, 3).reduce((sum, r) => sum + r, 0) *
+                  100,
+              )
+            : ui.axes(pc1, pc2);
         root.querySelector('[data-correlation]')!.textContent =
           correlation[state.stage].toFixed(2);
       };
@@ -212,7 +332,9 @@ const payload = JSON.stringify({
         });
       });
       root
-        .querySelectorAll<HTMLInputElement>('input[type="radio"]')
+        .querySelectorAll<HTMLInputElement>(
+          'input[type="radio"]:not([data-mode])',
+        )
         .forEach((input) => {
           input.disabled = false;
           input.addEventListener('change', () => {
@@ -220,6 +342,110 @@ const payload = JSON.stringify({
             render();
           });
         });
+      root
+        .querySelectorAll<HTMLInputElement>('[data-mode]')
+        .forEach((input) => {
+          input.disabled = false;
+          input.addEventListener('change', () => {
+            mode = Number(input.value);
+            render();
+          });
+        });
+      const setZoom = (value: number) => {
+        zoom = Math.max(0.5, Math.min(3, value));
+      };
+      svg.addEventListener(
+        'wheel',
+        (event) => {
+          if (mode !== 3) return;
+          event.preventDefault();
+          const unit =
+            event.deltaMode === 1
+              ? 16
+              : event.deltaMode === 2
+                ? svg.clientHeight
+                : 1;
+          setZoom(
+            zoom *
+              Math.exp(
+                -Math.max(-200, Math.min(200, event.deltaY * unit)) * 0.002,
+              ),
+          );
+          render();
+        },
+        { passive: false },
+      );
+      root.querySelector('[data-reset]')!.addEventListener('click', () => {
+        yaw = -25;
+        pitch = 20;
+        zoom = 1.5;
+        render();
+      });
+      const pointers = new Map<number, { x: number; y: number }>();
+      const distance = () => {
+        const [a, b] = [...pointers.values()];
+        return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0;
+      };
+      svg.addEventListener('pointerdown', (event) => {
+        if (mode !== 3 || event.button !== 0 || pointers.size >= 2) return;
+        pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+        svg.setPointerCapture(event.pointerId);
+      });
+      svg.addEventListener('pointermove', (event) => {
+        const previous = pointers.get(event.pointerId);
+        if (mode !== 3 || !previous) return;
+        const before = distance();
+        pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+        if (pointers.size === 2) {
+          const after = distance();
+          if (before > 0 && after > 0) setZoom((zoom * after) / before);
+        } else {
+          yaw = ((yaw + (event.clientX - previous.x) * 0.5 + 540) % 360) - 180;
+          pitch = Math.max(
+            -85,
+            Math.min(85, pitch + (event.clientY - previous.y) * 0.5),
+          );
+        }
+        render();
+      });
+      svg.addEventListener('keydown', (event) => {
+        if (
+          mode !== 3 ||
+          ![
+            'ArrowLeft',
+            'ArrowRight',
+            'ArrowUp',
+            'ArrowDown',
+            '+',
+            '=',
+            '-',
+          ].includes(event.key)
+        )
+          return;
+        event.preventDefault();
+        if (event.key === '+' || event.key === '=') setZoom(zoom * 1.1);
+        if (event.key === '-') setZoom(zoom / 1.1);
+        yaw +=
+          event.key === 'ArrowLeft' ? -5 : event.key === 'ArrowRight' ? 5 : 0;
+        pitch = Math.max(
+          -85,
+          Math.min(
+            85,
+            pitch +
+              (event.key === 'ArrowUp'
+                ? -5
+                : event.key === 'ArrowDown'
+                  ? 5
+                  : 0),
+          ),
+        );
+        render();
+      });
+      ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((name) =>
+        svg.addEventListener(name, (event) => {
+          pointers.delete((event as PointerEvent).pointerId);
+        }),
+      );
       render();
     });
 </script>
@@ -257,6 +483,32 @@ const payload = JSON.stringify({
     height: auto;
     max-width: 44rem;
     width: 100%;
+  }
+  [data-rotation] {
+    font-size: 0.85rem;
+    margin-bottom: 0.75rem;
+  }
+  .zoom-readout {
+    margin-right: 0.75rem;
+  }
+  [data-rotation] button {
+    font: inherit;
+    color: var(--ink);
+    background: var(--paper);
+    border: 1px solid var(--line);
+    padding: 0.25rem 0.5rem;
+    cursor: pointer;
+  }
+  [data-zoom-value] {
+    min-width: 3ch;
+    font-variant-numeric: tabular-nums;
+  }
+  svg[tabindex='0'] {
+    cursor: grab;
+    user-select: none;
+  }
+  svg[tabindex='0']:active {
+    cursor: grabbing;
   }
   .frame {
     fill: var(--paper-subtle);

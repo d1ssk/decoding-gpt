@@ -37,7 +37,7 @@ const losses = [
   { key: 'model', value: finalVal, label: ui.model },
 ];
 const lossWidth = 640;
-const lossRow = 30;
+const lossRow = 52;
 const lossMargin = { left: 12, right: 12, top: 8, bottom: 34 };
 const lossHeight = lossMargin.top + lossRow * losses.length + lossMargin.bottom;
 const lx = linearScale(
@@ -103,61 +103,71 @@ const lx = linearScale(
   <p class="note">{ui.note}</p>
 
   <p class="subcaption">{ui.lossCaption}</p>
-  <svg
-    viewBox={`0 0 ${lossWidth} ${lossHeight}`}
-    role="img"
-    aria-label={`${ui.lossCaption}: ${losses.map((l) => `${l.label} ${l.value.toFixed(3)}`).join(', ')}`}
+  <div
+    class="loss-scroll"
+    role="region"
+    aria-label={ui.lossCaption}
+    tabindex="0"
   >
-    {ticks(1.5, 4.5, 6).map((v) => (
-      <>
-        <path
-          d={`M${lx(v)} ${lossMargin.top}V${lossHeight - lossMargin.bottom}`}
-          class="grid"
-        />
-        <text
-          x={lx(v)}
-          y={lossHeight - lossMargin.bottom + 15}
-          class="tick"
-          text-anchor="middle"
-        >
-          {v}
-        </text>
-      </>
-    ))}
-    {losses.map((loss, i) => {
-      const cy = lossMargin.top + lossRow * i + lossRow / 2;
-      const right = lx(loss.value) > lossWidth / 2;
-      return (
-        <g>
-          <title>{`${loss.label}: ${loss.value.toFixed(4)}`}</title>
-          <path d={`M${lx(1.5)} ${cy}H${lx(loss.value)}`} class="stem" />
-          <circle
-            cx={lx(loss.value)}
-            cy={cy}
-            r="5"
-            class:list={['dot', loss.key]}
+    <svg
+      class="loss-chart"
+      viewBox={`0 0 ${lossWidth} ${lossHeight}`}
+      role="img"
+      aria-label={`${ui.lossCaption}: ${losses.map((l) => `${l.label} ${l.value.toFixed(3)}`).join(', ')}`}
+    >
+      {ticks(1.5, 4.5, 6).map((v) => (
+        <>
+          <path
+            d={`M${lx(v)} ${lossMargin.top}V${lossHeight - lossMargin.bottom}`}
+            class="grid"
           />
           <text
-            x={lx(loss.value) + (right ? -10 : 10)}
-            y={cy + 4}
-            class="loss-label"
-            text-anchor={right ? 'end' : 'start'}
+            x={lx(v)}
+            y={lossHeight - lossMargin.bottom + 15}
+            class="tick"
+            text-anchor="middle"
           >
-            {loss.label}{' '}
-            <tspan class="loss-value">{loss.value.toFixed(3)}</tspan>
+            {v}
           </text>
-        </g>
-      );
-    })}
-    <text
-      x={lossWidth - lossMargin.right}
-      y={lossHeight - 2}
-      class="tick"
-      text-anchor="end"
-    >
-      {ui.lossAxis}
-    </text>
-  </svg>
+        </>
+      ))}
+      {losses.map((loss, i) => {
+        const labelY = lossMargin.top + lossRow * i + 12;
+        const cy = labelY + 18;
+        return (
+          <g>
+            <title>{`${loss.label}: ${loss.value.toFixed(4)}`}</title>
+            <path d={`M${lx(1.5)} ${cy}H${lx(loss.value)}`} class="stem" />
+            <circle
+              cx={lx(loss.value)}
+              cy={cy}
+              r="5"
+              class:list={['dot', loss.key]}
+            />
+            <text x={lossMargin.left} y={labelY} class="loss-label">
+              {loss.label}
+            </text>
+            <text
+              x={lossWidth - lossMargin.right}
+              y={labelY}
+              class="loss-label loss-value"
+              text-anchor="end"
+            >
+              {loss.value.toFixed(3)}
+            </text>
+          </g>
+        );
+      })}
+      <text
+        x={lossWidth - lossMargin.right}
+        y={lossHeight - 2}
+        class="tick"
+        text-anchor="end"
+      >
+        {ui.lossAxis}
+      </text>
+    </svg>
+  </div>
   <p class="note">{ui.lossNote}</p>
 
   <details>
@@ -239,6 +249,12 @@ const lx = linearScale(
   .stem {
     stroke: var(--line-strong);
     stroke-width: 2;
+  }
+  .loss-scroll {
+    overflow-x: auto;
+  }
+  .loss-chart {
+    min-width: 520px;
   }
   .dot {
     fill: var(--ink-secondary);

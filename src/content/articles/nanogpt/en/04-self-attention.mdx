@@ -104,7 +104,7 @@ Self-attention creates three arrays with different roles from the same input `x`
 | Key: `k`   | Created at the source position and compared with the query                                        |
 | Value: `v` | Weighted using the query–key weights and added into the output                                    |
 
-The dot product of the query at position `t` and the key at position `j` gives a score for how much `t` attends to `j`. These scores are converted to weights, which multiply the values at each position before being added to compute the output at `t`. The “self” in _self_-attention refers to queries, keys, and values all coming from the same input sequence.
+For sample `b`, the dot product of the query at position `t` and the key at position `j` gives a score for how much `t` attends to `j`. These scores are converted to weights, which multiply the values at each position in the same sample before being added to compute the output at `t`. The “self” in _self_-attention refers to queries, keys, and values all coming from the same input sequence.
 
 ### Transform each position's vector with `nn.Linear`
 
@@ -164,7 +164,7 @@ k.transpose(-2, -1)       [B, 1, C, T]
 q @ k.transpose(-2, -1)   [B, 1, T, T]
 ```
 
-Of the last two axes, **row `t` is the output position, and column `j` is the source position**. Each element is computed from the dot product of the query at position `t` and the key at position `j`.
+Of the last two axes, **row `t` is the output position, and column `j` is the source position**. Each element is computed from the dot product of the query at position `t` and the key at position `j` within sample `b`.
 
 $$
 s_{t,j} = \frac{\boldsymbol{q}_t \cdot \boldsymbol{k}_j}{\sqrt{d}}

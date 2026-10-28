@@ -20,13 +20,13 @@ import AttentionHeads from '../../../../components/AttentionHeads.astro';
 
 ## Attend to several sources at once
 
-The previous chapter fixed `n_head = 1` and followed one attention head. With one head, each position's output is a sum of values weighted by a single set of attention weights.
+The previous chapter fixed `n_head = 1` and followed one attention head. In that case, each position's output is a sum of values weighted by a single set of attention weights.
 
-Predicting a continuation needs several kinds of information at once. For a character-level model, useful clues include the previous character, the start of the current word, and the start of the line. A single set of weights can only cover them by spreading its weight across several positions.
+Predicting a continuation, however, needs several kinds of information at once. For example, useful clues for a character-level model include the previous character, the start of the current word, and the start of the line. When a single head gathers information from these positions, it uses one shared set of attention weights for all these kinds of information.
 
-**Multi-head attention** runs several attention-weight computations side by side, each with its own queries, keys, and values. Each head chooses its sources independently, and the results are combined into one vector at the end.
+To gather different kinds of information with separate sets of weights, we use **multi-head attention**. It runs several attention-weight computations side by side, each with its own queries, keys, and values. This lets each head choose its sources independently. The results are then combined into one vector.
 
-nanoGPT adds no new module for multi-head attention. The [`CausalSelfAttention.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L52-L76) method from the previous chapter already handles `n_head > 1`. This chapter rereads the same code with attention on the head axis.
+In nanoGPT, this mechanism is already built into the [`CausalSelfAttention.forward()`](https://github.com/karpathy/nanoGPT/blob/3adf61e154c3fe3fca428ad6bc3818b27a3b8291/model.py#L52-L76) method from the previous chapter. Since the same code also handles `n_head > 1`, this chapter rereads it with attention on the head axis.
 
 ## Split the components by head
 
@@ -83,9 +83,11 @@ A^{(h)} = \operatorname{softmax}\!\left(\frac{Q^{(h)}{K^{(h)}}^\top}{\sqrt{d}} +
 Y^{(h)} = A^{(h)} V^{(h)}
 $$
 
-The scaling factor uses `k.size(-1)`, the number of components per head, `d`. In the previous chapter `d = C`; with `H = 4` and `C = 128`, `d = 32`, so the scores are multiplied by `1/√32`. The causal mask $M$ is shared by all heads: `self.bias` has shape `[1, 1, T, T]` and broadcasts across the batch and head axes.
+Scaling uses the number of components per head, `d = k.size(-1)`. The previous chapter had one head, so `d = C`; with `H = 4` and `C = 128`, `d = 32`, so the scores are multiplied by `1/√32`.
 
-There is one set of attention weights `att[b, h]` per head, and each head gathers only its own `d` value components. When computing one position's output, head 0 can gather from the previous character while head 3 gathers from the start of the line, for example.
+The causal mask $M$, meanwhile, is shared by all heads. It is applied by broadcasting `self.bias`, with shape `[1, 1, T, T]`, across the batch and head axes.
+
+Each head uses its own attention weights `att[b, h]` to form a weighted sum of its assigned `d` value components. Because each head can choose its sources independently, even when computing the output at the same position, head 0 can gather information from the previous character while head 3 gathers from the start of the line, for example.
 
 ## Place head outputs side by side and mix them with `c_proj`
 
@@ -96,16 +98,16 @@ y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs 
 y = self.resid_dropout(self.c_proj(y))
 ```
 
-`transpose(1, 2)` returns to `[B, T, H, d]`, and `view(B, T, C)` joins the last two axes. The vector at position `t` lists the outputs of head 0 through head `H − 1` in order:
+`transpose(1, 2)` returns to `[B, T, H, d]`, and `view(B, T, C)` joins the last two axes. The vector `y[b, t, :]` at position `t` in sample `b` lists the outputs of head 0 through head `H − 1` in order:
 
 $$
-\boldsymbol{y}_t = \left[\,\boldsymbol{y}^{(0)}_t;\ \boldsymbol{y}^{(1)}_t;\ \dots;\ \boldsymbol{y}^{(H-1)}_t\,\right]
+\boldsymbol{y}_{b,t} = \left[\,\boldsymbol{y}^{(0)}_{b,t};\ \boldsymbol{y}^{(1)}_{b,t};\ \dots;\ \boldsymbol{y}^{(H-1)}_{b,t}\,\right]
 $$
 
 At this point each head's result occupies its own components. The following `c_proj` (an `nn.Linear(C, C)`) mixes them into a `C`-component output. Split the columns of its weight $W_O$ (shape `[C, C]`) into blocks of `d` columns per head, written $W_O^{(h)}$. Ignoring the bias:
 
 $$
-W_O \boldsymbol{y}_t = \sum_{h=0}^{H-1} W_O^{(h)} \boldsymbol{y}^{(h)}_t
+W_O \boldsymbol{y}_{b,t} = \sum_{h=0}^{H-1} W_O^{(h)} \boldsymbol{y}^{(h)}_{b,t}
 $$
 
 **Each head writes into the residual stream through its own column block, and the attention output is the sum of these writes.** The previous chapter noted that, with one head, `c_proj` can be absorbed into the value transformation. With several heads, `c_proj` learns how to combine separately gathered information in the `C`-component space.
@@ -137,15 +139,16 @@ The values in this diagram are actual computations from the trained model, but t
 1. **Layer 0 heads look nearby.** All four have a mean attention distance of about 3 characters, and their average weight on the previous position ranges from 0.21 to 0.30.
 2. **Layer 1, head 3 looks at the start of the line.** Its mean attention distance is 13.8 characters, much larger than the other heads. At most positions inside the second `Good morrow,`, its largest weight falls on the preceding newline (position 51). At position 55 (`d`), for example, the weight is `0.807`.
 3. **Layer 1, heads 0 and 1 look at the start of the word.** Selecting the first four letters of `morrow` (`m`, `o`, `r`, `r`; positions 57–60) shows both heads assigning weights of `0.69`–`0.996` to the preceding space (position 56).
-4. **The repeated phrase is not used.** The second `Good morrow,` (positions 52–63) repeats the first (positions 8–19), but across all 16 heads the largest weight assigned to the first phrase is `0.074`. In the cases examined, the heads attend to nearby positions and to separators such as spaces and newlines.
 
 ### How does the loss change when a head is zeroed?
 
-One way to measure a head's importance is to replace its output `y[:, h]` with `0` before `c_proj` and observe the change in loss. This is an intervention for inspection; nanoGPT inference never does this.
+To investigate a head's role, we deliberately replace its output `y[:, h]` with `0` before `c_proj`. The resulting change in loss shows its effect on prediction.
 
-On 200 validation inputs of 64 characters chosen with a fixed seed, the baseline loss was `1.9107`. It differs from `train.py`'s `1.8857` because the evaluation inputs are chosen differently and their number differs. The largest increase came from layer 0, head 3 (`+0.240`), and the smallest from layer 3, head 3 (`+0.005`). Layer 1, head 3, which looks at line starts, gave `+0.007`. Use “Show statistics for all heads” in the diagram to see the full list.
+Evaluating on 200 validation inputs of 64 characters chosen with a fixed seed gave a loss of `1.9107` before zeroing any outputs. This differs from the `1.8857` reported by `train.py` because the selection and number of evaluation inputs differ.
 
-The loss increase shows how much the rest of the model depends on a head's output. Understanding what a head represents takes other observations as well, such as its attention pattern. Layer 1, head 3, which looks at line starts, has a clear pattern yet a small loss increase.
+Using this value as the baseline, we zero each head's output one at a time and compare the loss. The largest increase came from layer 0, head 3 (`+0.240`), and the smallest from layer 3, head 3 (`+0.005`). Use “Show statistics for all heads” in the diagram to see the results for every head.
+
+The loss increase indicates how much the rest of the model depends on that head's output. For example, layer 1, head 3 has a clear pattern of attending to line starts, yet zeroing its output increased the loss by only `+0.007`. Investigating each head's role requires looking at both its effect on loss and where it attends.
 
 ## Verify in code
 
@@ -208,6 +211,6 @@ The first line gives the shapes of the queries, attention weights, per-head aggr
 
 ## Next chapter
 
-Multi-head attention divides `C` components among `H` heads, and each head gathers values with its own attention weights. Placing the results side by side and passing them through `c_proj` lets each head write to the output through its column block. In the trained model, different heads attended to the previous character, the start of the word, and the start of the line.
+In this chapter, we reread the same code as in the previous chapter, focusing on the head axis. We followed the array shapes as the `C` components of queries, keys, and values were split among `H` heads, information was gathered with separate attention weights, and the results were combined by `c_proj`. We then inspected the trained model and observed heads attending to different sources, including the previous character and the starts of words and lines.
 
-`Block.forward()` adds the attention output to the original `x`. The next chapter covers the residual stream formed by these additions, the MLP that transforms each position separately, and the LayerNorm placed before both.
+`Block.forward()` then adds this attention output to the original `x`. The next chapter follows the residual stream, which carries information forward through these additions. We also examine the MLP that transforms each position separately and the LayerNorm placed before attention and the MLP.

@@ -13,6 +13,9 @@ const labels = ['a', 'b', 'c', 'd', 'e'];
 const initialLogits = [2, 1, 0.5, -1, 0];
 const initialTarget = 2;
 const probs = softmax(initialLogits);
+const initialLoss = -Math.log(probs[initialTarget]);
+// Cover the largest loss possible with logits between -4 and 4.
+const lossScaleMax = Math.ceil(Math.log(1 + (labels.length - 1) * Math.exp(8)));
 const id = `ce-${lang}-${showGradient ? 'g' : 'l'}`;
 const gradients = probs.map((p, i) => p - (i === initialTarget ? 1 : 0));
 const gradStyle = (g: number) =>
@@ -101,9 +104,23 @@ const gradStyle = (g: number) =>
     </table>
   </div>
   <p class="loss" aria-live="polite">
-    {ui.loss} ={' '}
-    <output data-loss>{(-Math.log(probs[initialTarget])).toFixed(3)}</output>
+    {ui.loss} = <output data-loss>{initialLoss.toFixed(3)}</output> nat
   </p>
+  <div class="loss-chart" aria-hidden="true">
+    <span class="track loss-track">
+      <span
+        class="fill loss-fill"
+        data-loss-bar
+        data-max={lossScaleMax}
+        style={`width: ${(initialLoss / lossScaleMax) * 100}%`}
+      />
+    </span>
+    <div class="loss-axis">
+      <span>0</span>
+      <span>{lossScaleMax / 2}</span>
+      <span>{lossScaleMax} nat</span>
+    </div>
+  </div>
   {showGradient && <p class="note">{ui.gradientNote}</p>}
 </figure>
 
@@ -120,6 +137,8 @@ const gradStyle = (g: number) =>
         ...root.querySelectorAll<HTMLInputElement>('input[type="radio"]'),
       ];
       const showGradient = root.dataset.gradient === 'true';
+      const lossBar = root.querySelector<HTMLElement>('[data-loss-bar]')!;
+      const lossScaleMax = Number(lossBar.dataset.max);
       const update = () => {
         const logits = sliders.map((s) => Number(s.value));
         const target = radios.findIndex((r) => r.checked);
@@ -146,9 +165,9 @@ const gradStyle = (g: number) =>
               g.toFixed(3);
           }
         });
-        root.querySelector('[data-loss]')!.textContent = (-Math.log(
-          probs[target],
-        )).toFixed(3);
+        const loss = -Math.log(probs[target]);
+        root.querySelector('[data-loss]')!.textContent = loss.toFixed(3);
+        lossBar.style.width = `${(loss / lossScaleMax) * 100}%`;
       };
       sliders.forEach((control) => {
         control.disabled = false;
@@ -237,5 +256,22 @@ const gradStyle = (g: number) =>
   }
   .loss {
     font-size: 0.9rem;
+    margin-bottom: 0.5rem;
+  }
+  .loss-chart {
+    margin-bottom: 1rem;
+  }
+  .loss-track {
+    height: 1rem;
+  }
+  .loss-fill {
+    background: #a05a20;
+  }
+  .loss-axis {
+    color: var(--ink-secondary);
+    display: flex;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    justify-content: space-between;
   }
 </style>
